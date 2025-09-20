@@ -2,48 +2,48 @@ version: 2.1
 
 orbs:
   # Use the official GitHub orb for interacting with GitHub
-  github: circleci/github-cli@3.0.0
+  github: circleci/github-cli@3.1.0
 
 executors:
   go-executor:
     docker:
-      - image: cimg/go:1.25.1
+      - image: cimg/go:1.21
     environment:
       GO111MODULE: "on"
 
 workflows:
   # Main workflow for interactive Claude responses (similar to claude.yml)
   claude-interactive:
-    when:
-      and:
-        - equal: [main, << pipeline.git.branch >>]
     jobs:
       - check-claude-mentions:
           context: claude-secrets
           filters:
             branches:
               only: main
-            tags:
-              ignore: /.*/
 
   # Code review workflow for PRs (similar to claude-code-review.yml)
   claude-code-review:
-    when:
-      and:
-        - equal: [main, << pipeline.git.branch >>]
     jobs:
       - check-pr-labels:
           context: claude-secrets
           filters:
             branches:
-              only: main
+              ignore: main
 
 jobs:
   check-claude-mentions:
     executor: go-executor
     steps:
       - checkout
-      - github/install
+      - github/setup:
+          github-token: $GITHUB_TOKEN
+      - run:
+          name: Install Claude Code CLI
+          command: |
+            curl -fsSL https://claude.ai/install.sh | sh
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> $BASH_ENV
+          environment:
+            PATH: "$HOME/.local/bin:$PATH"
       - run:
           name: Check for @claude mentions
           command: |
@@ -55,7 +55,7 @@ jobs:
               echo "Found @claude mention in commit message"
 
               # Run Claude Code for interactive response
-              anthropics claude-code \
+              claude-code \
                 --anthropic-api-key "$ANTHROPIC_API_KEY" \
                 --base-url "$ANTHROPIC_BASE_URL" \
                 --model "$ANTHROPIC_MODEL" \
@@ -67,12 +67,21 @@ jobs:
             ANTHROPIC_BASE_URL: $ANTHROPIC_BASE_URL
             ANTHROPIC_MODEL: $ANTHROPIC_MODEL
             ANTHROPIC_SMALL_FAST_MODEL: $ANTHROPIC_SMALL_FAST_MODEL
+            GITHUB_TOKEN: $GITHUB_TOKEN
 
   check-pr-labels:
     executor: go-executor
     steps:
       - checkout
-      - github/install
+      - github/setup:
+          github-token: $GITHUB_TOKEN
+      - run:
+          name: Install Claude Code CLI
+          command: |
+            curl -fsSL https://claude.ai/install.sh | sh
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> $BASH_ENV
+          environment:
+            PATH: "$HOME/.local/bin:$PATH"
       - run:
           name: Check for claude-review label
           command: |
@@ -80,16 +89,16 @@ jobs:
             # we'll check if this is a PR build and look for the label
             if [ -n "$CIRCLE_PULL_REQUEST" ]; then
               echo "Processing pull request: $CIRCLE_PULL_REQUEST"
-              
+
               # Get PR details including labels
               PR_DETAILS=$(gh pr view "$CIRCLE_PULL_REQUEST" --json labels)
-              
+
               # Check if claude-review label is present
               if echo "$PR_DETAILS" | grep -q "claude-review"; then
                 echo "Found claude-review label, running Claude Code Review"
-                
+
                 # Run Claude Code Review
-                anthropics claude-code \
+                claude-code \
                   --anthropic-api-key "$ANTHROPIC_API_KEY" \
                   --base-url "$ANTHROPIC_BASE_URL" \
                   --model "$ANTHROPIC_MODEL" \
@@ -100,9 +109,9 @@ jobs:
                   - Performance considerations
                   - Security concerns
                   - Test coverage
-                  
+
                   Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
-                  
+
                   Use \`gh pr comment\` with your Bash tool to leave your review as a comment on the PR."
               fi
             fi
@@ -111,3 +120,4 @@ jobs:
             ANTHROPIC_BASE_URL: $ANTHROPIC_BASE_URL
             ANTHROPIC_MODEL: $ANTHROPIC_MODEL
             ANTHROPIC_SMALL_FAST_MODEL: $ANTHROPIC_SMALL_FAST_MODEL
+            GITHUB_TOKEN: $GITHUB_TOKEN
