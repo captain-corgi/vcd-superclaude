@@ -1,0 +1,113 @@
+version: 2.1
+
+orbs:
+  # Use the official GitHub orb for interacting with GitHub
+  github: circleci/github-cli@3.0.0
+
+executors:
+  go-executor:
+    docker:
+      - image: cimg/go:1.25.1
+    environment:
+      GO111MODULE: "on"
+
+workflows:
+  # Main workflow for interactive Claude responses (similar to claude.yml)
+  claude-interactive:
+    when:
+      and:
+        - equal: [main, << pipeline.git.branch >>]
+    jobs:
+      - check-claude-mentions:
+          context: claude-secrets
+          filters:
+            branches:
+              only: main
+            tags:
+              ignore: /.*/
+
+  # Code review workflow for PRs (similar to claude-code-review.yml)
+  claude-code-review:
+    when:
+      and:
+        - equal: [main, << pipeline.git.branch >>]
+    jobs:
+      - check-pr-labels:
+          context: claude-secrets
+          filters:
+            branches:
+              only: main
+
+jobs:
+  check-claude-mentions:
+    executor: go-executor
+    steps:
+      - checkout
+      - github/install
+      - run:
+          name: Check for @claude mentions
+          command: |
+            # Get latest commit message
+            COMMIT_MSG=$(git log -1 --pretty=%B)
+
+            # Check if commit contains @claude mention
+            if echo "$COMMIT_MSG" | grep -q "@claude"; then
+              echo "Found @claude mention in commit message"
+
+              # Run Claude Code for interactive response
+              anthropics claude-code \
+                --anthropic-api-key "$ANTHROPIC_API_KEY" \
+                --base-url "$ANTHROPIC_BASE_URL" \
+                --model "$ANTHROPIC_MODEL" \
+                --allowed-tools "Bash(gh:*),Bash(git:*)" \
+                --prompt "Respond to the @claude mention in the commit message: $COMMIT_MSG"
+            fi
+          environment:
+            ANTHROPIC_API_KEY: $ANTHROPIC_API_KEY
+            ANTHROPIC_BASE_URL: $ANTHROPIC_BASE_URL
+            ANTHROPIC_MODEL: $ANTHROPIC_MODEL
+            ANTHROPIC_SMALL_FAST_MODEL: $ANTHROPIC_SMALL_FAST_MODEL
+
+  check-pr-labels:
+    executor: go-executor
+    steps:
+      - checkout
+      - github/install
+      - run:
+          name: Check for claude-review label
+          command: |
+            # Since CircleCI doesn't have direct access to PR events like GitHub Actions,
+            # we'll check if this is a PR build and look for the label
+            if [ -n "$CIRCLE_PULL_REQUEST" ]; then
+              echo "Processing pull request: $CIRCLE_PULL_REQUEST"
+              
+              # Get PR details including labels
+              PR_DETAILS=$(gh pr view "$CIRCLE_PULL_REQUEST" --json labels)
+              
+              # Check if claude-review label is present
+              if echo "$PR_DETAILS" | grep -q "claude-review"; then
+                echo "Found claude-review label, running Claude Code Review"
+                
+                # Run Claude Code Review
+                anthropics claude-code \
+                  --anthropic-api-key "$ANTHROPIC_API_KEY" \
+                  --base-url "$ANTHROPIC_BASE_URL" \
+                  --model "$ANTHROPIC_MODEL" \
+                  --allowed-tools "Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh search:*),Bash(gh issue list:*)" \
+                  --prompt "Please review this pull request and provide feedback on:
+                  - Code quality and best practices
+                  - Potential bugs or issues
+                  - Performance considerations
+                  - Security concerns
+                  - Test coverage
+                  
+                  Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+                  
+                  Use \`gh pr comment\` with your Bash tool to leave your review as a comment on the PR."
+              fi
+            fi
+          environment:
+            ANTHROPIC_API_KEY: $ANTHROPIC_API_KEY
+            ANTHROPIC_BASE_URL: $ANTHROPIC_BASE_URL
+            ANTHROPIC_MODEL: $ANTHROPIC_MODEL
+            ANTHROPIC_SMALL_FAST_MODEL: $ANTHROPIC_SMALL_FAST_MODEL
