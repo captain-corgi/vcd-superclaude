@@ -3,6 +3,8 @@ version: 2.1
 orbs:
   # Use the official GitHub orb for interacting with GitHub
   github: circleci/github-cli@3.1.0
+  # Slack notification orb
+  slack: circleci/slack@4.12.5
 
 executors:
   go-executor:
@@ -11,65 +13,280 @@ executors:
     environment:
       GO111MODULE: "on"
 
+# Define reusable commands
+commands:
+  # Install Go dependencies
+  install-deps:
+    steps:
+      - run:
+          name: Install Go dependencies
+          command: |
+            go mod download
+            go mod verify
+
+  # Run linting
+  run-lint:
+    steps:
+      - run:
+          name: Run linting
+          command: make lint
+
+  # Setup GitHub CLI
+  setup-github-cli:
+    steps:
+      - run:
+          name: Install GitHub CLI and tools
+          command: |
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update
+            sudo apt install gh jq -y
+
+  # Get PR information and check for claude-review label
+  check-pr-labels:
+    steps:
+      - run:
+          name: Get PR information and check labels
+          command: |
+            # Set repository info
+            echo "export REPO_NAME=$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME" >> $BASH_ENV
+            echo "Repository: $CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME"
+
+            # Try to find PR number from CircleCI environment first
+            if [ -n "$CIRCLE_PULL_REQUEST" ]; then
+              PR_NUMBER=$(echo $CIRCLE_PULL_REQUEST | sed 's/.*\/pull\///')
+              echo "export PR_NUMBER=$PR_NUMBER" >> $BASH_ENV
+              echo "PR Number from CIRCLE_PULL_REQUEST: $PR_NUMBER"
+            else
+              # If no CIRCLE_PULL_REQUEST, try to find PR by branch name
+              echo "No CIRCLE_PULL_REQUEST found, searching for PR by branch..."
+              BRANCH_NAME="$CIRCLE_BRANCH"
+              echo "Current branch: $BRANCH_NAME"
+
+              # Use GitHub CLI to find PR for this branch
+              PR_NUMBER=$(gh pr list --repo $CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME --head $BRANCH_NAME --json number --jq '.[0].number' 2>/dev/null || echo "")
+
+              if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
+                echo "export PR_NUMBER=$PR_NUMBER" >> $BASH_ENV
+                echo "Found PR Number by branch search: $PR_NUMBER"
+              else
+                echo "No pull request found for branch $BRANCH_NAME"
+                echo "export PR_NUMBER=" >> $BASH_ENV
+                exit 0
+              fi
+            fi
+
+            # Check if PR has claude-review label
+            if [ -n "$PR_NUMBER" ]; then
+              echo "Checking PR labels for #$PR_NUMBER..."
+              PR_LABELS=$(gh pr view $PR_NUMBER --repo $REPO_NAME --json labels --jq '.labels[].name' 2>/dev/null || echo "")
+              echo "PR labels: $PR_LABELS"
+
+              if echo "$PR_LABELS" | grep -q "claude-review"; then
+                echo "✅ PR has claude-review label - will run enhanced workflow"
+                echo "export HAS_CLAUDE_REVIEW_LABEL=true" >> $BASH_ENV
+              else
+                echo "ℹ️ PR does not have claude-review label - running standard workflow"
+                echo "export HAS_CLAUDE_REVIEW_LABEL=false" >> $BASH_ENV
+              fi
+            else
+              echo "ℹ️ Not a pull request - running standard workflow"
+              echo "export HAS_CLAUDE_REVIEW_LABEL=false" >> $BASH_ENV
+            fi
+
 workflows:
+  # Workflow for PRs targeting main branch
+  pr-to-main:
+    jobs:
+      - lint:
+          context:
+            - claude-secrets
+            - slack-secrets
+      - test:
+          context:
+            - claude-secrets
+            - slack-secrets
+          requires:
+            - lint
+      - claude-code-review:
+          context: claude-secrets
+          requires:
+            - lint
+    when:
+      and:
+        - equal: [pull_request, << pipeline.trigger_source >>]
+        - equal: [main, << pipeline.git.branch >>]
+
+  # Workflow for commits tagged with claude-review
+  claude-review-tag:
+    jobs:
+      - lint:
+          context:
+            - claude-secrets
+            - slack-secrets
+      - test:
+          context:
+            - claude-secrets
+            - slack-secrets
+          requires:
+            - lint
+    when:
+      and:
+        - equal: [tag, << pipeline.trigger_source >>]
+        - equal: [claude-review, << pipeline.git.tag >>]
+
+  # Workflow for PRs with claude-review label
+  pr-with-claude-review:
+    jobs:
+      - lint:
+          context:
+            - claude-secrets
+            - slack-secrets
+      - test:
+          context:
+            - claude-secrets
+            - slack-secrets
+          requires:
+            - lint
+      - claude-code-review:
+          context: claude-secrets
+          requires:
+            - lint
+    when:
+      and:
+        - equal: [pull_request, << pipeline.trigger_source >>]
+        # The actual label check happens in the check-pr-labels command
+        # This workflow will run for all PRs, but the jobs will show claude-review status
+
+  # Workflow for testing - triggers on pushes to feature branches
+  test-workflow:
+    jobs:
+      - lint:
+          context:
+            - claude-secrets
+            - slack-secrets
+      - test:
+          context:
+            - claude-secrets
+            - slack-secrets
+          requires:
+            - lint
+    when:
+      and:
+        - equal: [push, << pipeline.trigger_source >>]
+        - not:
+            equal: [main, << pipeline.git.branch >>]
+
   # Main workflow for interactive Claude responses (similar to claude.yml)
   claude-interactive:
     jobs:
-      - check-claude-mentions:
+      - claude-interactive:
           context: claude-secrets
           filters:
             branches:
               only: main
 
-  # Code review workflow for PRs (similar to claude-code-review.yml)
-  claude-code-review:
-    jobs:
-      - check-pr-labels:
-          context: claude-secrets
-          filters:
-            branches:
-              ignore: main
-
 jobs:
-  check-claude-mentions:
+  # Lint job
+  lint:
     executor: go-executor
     steps:
       - checkout
-      - github/setup:
-          github-token: $GITHUB_TOKEN
+      - setup-github-cli
+      - check-pr-labels
       - run:
-          name: Install Claude Code CLI
+          name: Authenticate with GitHub
           command: |
-            curl -fsSL https://claude.ai/install.sh | sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> $BASH_ENV
-          environment:
-            PATH: "$HOME/.local/bin:$PATH"
+            # Set GitHub token for gh CLI
+            export GH_TOKEN="$GITHUB_TOKEN"
+            gh auth status
+            echo "✅ GitHub authentication successful"
+      - install-deps
+      - run-lint
+      - slack/notify:
+          event: pass
+          custom: |
+            {
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ *Multi-Agent System - Linting Passed!*\n\n*Project:* $CIRCLE_PROJECT_REPONAME\n*Branch:* $CIRCLE_BRANCH\n*Commit:* <https://github.com/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/commit/$CIRCLE_SHA1|${CIRCLE_SHA1:0:7}>\n*Author:* $CIRCLE_USERNAME\n*PR:* ${PR_NUMBER:+<https://github.com/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pull/$PR_NUMBER|#$PR_NUMBER>}\n*Claude Review:* ${HAS_CLAUDE_REVIEW_LABEL:+✅ Enabled}"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Pipeline"
+                      },
+                      "url": "$CIRCLE_BUILD_URL"
+                    }
+                  ]
+                }
+              ]
+            }
+
+  # Test job
+  test:
+    executor: go-executor
+    steps:
+      - checkout
+      - setup-github-cli
+      - check-pr-labels
       - run:
-          name: Check for @claude mentions
+          name: Authenticate with GitHub
           command: |
-            # Get latest commit message
-            COMMIT_MSG=$(git log -1 --pretty=%B)
+            # Set GitHub token for gh CLI
+            export GH_TOKEN="$GITHUB_TOKEN"
+            gh auth status
+            echo "✅ GitHub authentication successful"
+      - install-deps
+      - run:
+          name: Run tests
+          command: make test
+      - run:
+          name: Generate coverage report
+          command: make test-coverage
+      - store_test_results:
+          path: coverage.out
+      - store_artifacts:
+          path: coverage.html
+          destination: coverage-report
+      - slack/notify:
+          event: pass
+          custom: |
+            {
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ *Multi-Agent System - Tests Passed!*\n\n*Project:* $CIRCLE_PROJECT_REPONAME\n*Branch:* $CIRCLE_BRANCH\n*Commit:* <https://github.com/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/commit/$CIRCLE_SHA1|${CIRCLE_SHA1:0:7}>\n*Author:* $CIRCLE_USERNAME\n*PR:* ${PR_NUMBER:+<https://github.com/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME/pull/$PR_NUMBER|#$PR_NUMBER>}\n*Claude Review:* ${HAS_CLAUDE_REVIEW_LABEL:+✅ Enabled}"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Pipeline"
+                      },
+                      "url": "$CIRCLE_BUILD_URL"
+                    }
+                  ]
+                }
+              ]
+            }
 
-            # Check if commit contains @claude mention
-            if echo "$COMMIT_MSG" | grep -q "@claude"; then
-              echo "Found @claude mention in commit message"
-
-              # Run Claude Code for interactive response
-              claude-code \
-                --anthropic-api-key "$ANTHROPIC_API_KEY" \
-                --base-url "$ANTHROPIC_BASE_URL" \
-                --model "$ANTHROPIC_MODEL" \
-                --allowed-tools "Bash(gh:*),Bash(git:*)" \
-                --prompt "Respond to the @claude mention in the commit message: $COMMIT_MSG"
-            fi
-          environment:
-            ANTHROPIC_API_KEY: $ANTHROPIC_API_KEY
-            ANTHROPIC_BASE_URL: $ANTHROPIC_BASE_URL
-            ANTHROPIC_MODEL: $ANTHROPIC_MODEL
-            ANTHROPIC_SMALL_FAST_MODEL: $ANTHROPIC_SMALL_FAST_MODEL
-            GITHUB_TOKEN: $GITHUB_TOKEN
-
-  check-pr-labels:
+  # Claude Code Review job
+  claude-code-review:
     executor: go-executor
     steps:
       - checkout
@@ -114,6 +331,45 @@ jobs:
 
                   Use \`gh pr comment\` with your Bash tool to leave your review as a comment on the PR."
               fi
+            fi
+          environment:
+            ANTHROPIC_API_KEY: $ANTHROPIC_API_KEY
+            ANTHROPIC_BASE_URL: $ANTHROPIC_BASE_URL
+            ANTHROPIC_MODEL: $ANTHROPIC_MODEL
+            ANTHROPIC_SMALL_FAST_MODEL: $ANTHROPIC_SMALL_FAST_MODEL
+            GITHUB_TOKEN: $GITHUB_TOKEN
+
+  # Claude Interactive job
+  claude-interactive:
+    executor: go-executor
+    steps:
+      - checkout
+      - github/setup:
+          github-token: $GITHUB_TOKEN
+      - run:
+          name: Install Claude Code CLI
+          command: |
+            curl -fsSL https://claude.ai/install.sh | sh
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> $BASH_ENV
+          environment:
+            PATH: "$HOME/.local/bin:$PATH"
+      - run:
+          name: Check for @claude mentions
+          command: |
+            # Get latest commit message
+            COMMIT_MSG=$(git log -1 --pretty=%B)
+
+            # Check if commit contains @claude mention
+            if echo "$COMMIT_MSG" | grep -q "@claude"; then
+              echo "Found @claude mention in commit message"
+
+              # Run Claude Code for interactive response
+              claude-code \
+                --anthropic-api-key "$ANTHROPIC_API_KEY" \
+                --base-url "$ANTHROPIC_BASE_URL" \
+                --model "$ANTHROPIC_MODEL" \
+                --allowed-tools "Bash(gh:*),Bash(git:*)" \
+                --prompt "Respond to the @claude mention in the commit message: $COMMIT_MSG"
             fi
           environment:
             ANTHROPIC_API_KEY: $ANTHROPIC_API_KEY
