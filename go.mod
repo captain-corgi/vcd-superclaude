@@ -1,6 +1,6 @@
-module github.com/anh-tuan-l/multi-agent-system
+module github.com/captain-corgi/multi-agent-system
 
-go 1.24.3
+go 1.25.1
 
 require (
 	github.com/go-redis/redis/v8 v8.11.5

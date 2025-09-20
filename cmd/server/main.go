@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/anh-tuan-l/multi-agent-system/internal/web"
-	"github.com/anh-tuan-l/multi-agent-system/pkg/config"
-	"github.com/anh-tuan-l/multi-agent-system/pkg/logger"
-	"github.com/anh-tuan-l/multi-agent-system/pkg/storage"
+	"github.com/captain-corgi/multi-agent-system/internal/web"
+	"github.com/captain-corgi/multi-agent-system/pkg/config"
+	"github.com/captain-corgi/multi-agent-system/pkg/logger"
+	"github.com/captain-corgi/multi-agent-system/pkg/storage"
 	"go.uber.org/zap"
 )
 

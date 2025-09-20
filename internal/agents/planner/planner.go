@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anh-tuan-l/multi-agent-system/internal/agents"
-	"github.com/anh-tuan-l/multi-agent-system/internal/communication/trpc"
+	"github.com/captain-corgi/multi-agent-system/internal/agents"
+	"github.com/captain-corgi/multi-agent-system/internal/communication/trpc"
 	"go.uber.org/zap"
 )
 

@@ -11,10 +11,10 @@ import (
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 
-	"github.com/anh-tuan-l/multi-agent-system/internal/agents"
-	"github.com/anh-tuan-l/multi-agent-system/internal/communication/streaming"
-	"github.com/anh-tuan-l/multi-agent-system/pkg/config"
-	"github.com/anh-tuan-l/multi-agent-system/pkg/storage"
+	"github.com/captain-corgi/multi-agent-system/internal/agents"
+	"github.com/captain-corgi/multi-agent-system/internal/communication/streaming"
+	"github.com/captain-corgi/multi-agent-system/pkg/config"
+	"github.com/captain-corgi/multi-agent-system/pkg/storage"
 )
 
 type Server struct {

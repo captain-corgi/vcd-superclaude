@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anh-tuan-l/multi-agent-system/internal/agents"
+	"github.com/captain-corgi/multi-agent-system/internal/agents"
 	"go.uber.org/zap"
 )
 
