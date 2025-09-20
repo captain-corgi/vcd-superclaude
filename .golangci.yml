@@ -1,0 +1,194 @@
+# Golangci-lint configuration
+# Multi-Agent System linter rules and settings
+
+run:
+  # Timeout for analysis
+  timeout: 5m
+
+  # Issues to exclude
+  exclude-use-default: false
+  skip-dirs:
+    - vendor
+    - third_party
+    - testdata
+    - node_modules
+    - bin
+    - migrations
+    - scripts
+
+  # Include specific directories
+  # TODO: Remove this line to run linters on whole project
+  dirs:
+    - pkg
+    - internal
+
+  # Select which linters to run
+  linters:
+    # Default linters
+    - gofmt
+    - govet
+    - golint
+    - ineffassign
+    - misspell
+    - staticcheck
+    - structcheck
+    - typecheck
+    - unused
+    - varcheck
+
+    # Additional linters
+    - gocyclo         # Cyclomatic complexity
+    - gosec          # Security checks
+    - maligned       # Struct field alignment
+    - unconvert      # Unnecessary type conversions
+    - interfacer     # Interface usage
+    - goconst        # String constants
+    - gocritic       # Criticisms
+    - gocognit       # Cognitive complexity
+    - godot          # Comments on exported declarations
+    - paralleltest   # Parallel test detection
+    - whitespace     # Whitespace checking
+    - dupl           # Duplicate code
+    - prealloc       # Preallocation checks
+    - gochecknoinits # No init functions
+
+  # Linters settings
+  linters-settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+        - shadow
+
+    golint:
+      min-confidence: 0.8
+      max-issues-per-linter: 0
+      max-issues-per-file: 0
+
+    gocyclo:
+      min-complexity: 10
+
+    maligned:
+      suggest-new: true
+
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+
+    gocritic:
+      enabled-checks:
+        - rangeValCopy
+        - appendAssign
+        - badCall
+        - badLock
+        - boolExprSimplify
+        - builtinShadow
+        - caseOrder
+        - compareExprSideEffects
+        - commentedOutCode
+        - deepEq
+        - deferUnlambda
+        - deprecatedComment
+        - docArg
+        - dupCase
+        - dupImport
+        - elseIfChain
+        - emptyDecl
+        - emptyFallthrough
+        - encodingName
+        - errorString
+        - exitAfterDefer
+        - flagDeref
+        - flagName
+        - hugeParam
+        - ifElseChain
+        - importShadow
+        - indexAlloc
+        - initClause
+        - largeVar
+        - methodCallVal
+        - newAlloc
+        - nilReturn
+        - octalLiteral
+        - ptrRef
+        - rangeValCopy
+        - regexpMust
+        - shadow
+        - shiftInt
+        - skipPkgTests
+        - sliceClear
+        - sloppyCmp
+        - sloppyLen
+        - sloppyReassign
+        - sortSlice
+        - stdMethods
+        - stringConcat
+        - stringXbytes
+        - switchTrue
+        - typeSwitchVar
+        - typeUnparen
+        - uncommonType
+        - unlabel
+        - unnamedResult
+        - unnecessaryBlock
+        - unslice
+        - unusedParam
+        - valSwap
+        - weakCond
+        - whyNoLint
+        - wrapperFunc
+
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: false
+      slice-literals: false
+
+    dupl:
+      threshold: 100
+
+    gochecknoinits:
+      analyzer: true
+
+  # Output issues
+  output:
+    format: colored-line-number
+    print-issued-lines: true
+    print-linter-name: true
+
+  # Severity of issues
+  issues:
+    # Excluding per-file issues
+    exclude-case-sensitive: false
+    exclude-rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - goconst
+          - dupl
+
+      - path: internal/agents/.*\.go
+        linters:
+          - interfacer
+
+      - path: pkg/models/.*\.go
+        linters:
+          - maligned
+
+    # Excluding by text
+    exclude-text:
+      - "do not define dynamic error types"
+      - "exported (function|method|type|var) will be used by other packages"
+
+    # Excluding by source
+    exclude:
+      - "vendor/"
+
+    # Maximum issues count per file
+    max-issues-per-file: 50
+
+    # Show only new issues from staged files
+    new-from-rev: HEAD
+
+    # Fix issues
+    fix: false

@@ -1,0 +1,101 @@
+services:
+  # Main application in development mode
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    container_name: multi-agent-system-dev
+    ports:
+      - "8080:8080"
+      - "2345:2345" # Debug port
+    environment:
+      - APP_NAME=multi-agent-system
+      - APP_VERSION=1.0.0
+      - APP_DEBUG=true
+      - APP_PORT=8080
+      - APP_TIMEOUT=30s
+      - DATABASE_URL=postgres://postgres:password@postgres:5432/multiagent?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=debug
+      - LOG_FORMAT=json
+    volumes:
+      - ..:/app:cached
+      - /app/go.mod
+      - /app/go.sum
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - multi-agent-network
+    restart: unless-stopped
+    command: /bin/sh -c "while sleep 1; do :; done" # Keep container running for debugging
+    profiles:
+      - dev
+
+  # PostgreSQL database
+  postgres:
+    image: postgres:15-alpine
+    container_name: multi-agent-db-dev
+    environment:
+      POSTGRES_DB: multiagent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - multi-agent-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis cache
+  redis:
+    image: redis:7-alpine
+    container_name: multi-agent-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ../docker/redis.conf:/etc/redis/redis.conf
+    networks:
+      - multi-agent-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    command: redis-server /etc/redis/redis.conf
+
+  # Development tools
+  # Optional: Hot reload proxy for development
+  dev-proxy:
+    image: nginx:alpine
+    container_name: multi-agent-dev-proxy
+    ports:
+      - "3000:80"
+    volumes:
+      - ../docker/dev-proxy.conf:/etc/nginx/nginx.conf
+    networks:
+      - multi-agent-network
+    restart: unless-stopped
+    profiles:
+      - dev
+
+networks:
+  multi-agent-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
