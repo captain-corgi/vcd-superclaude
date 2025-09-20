@@ -1,0 +1,77 @@
+app:
+  name: "multi-agent-system"
+  version: "1.0.0"
+  debug: true
+  port: 8080
+  timeout: 30s
+
+agents:
+  planner:
+    enabled: true
+    max_requests: 10
+    timeout: 30s
+
+  executor:
+    enabled: true
+    rate_limit: 100
+    retry_count: 3
+    tools:
+      - jira
+      - slack
+      - github
+
+  evaluator:
+    enabled: true
+    cache_ttl: 1h
+    max_report_size: 10MB
+    validation_rules:
+      - name: "data_completeness"
+        type: "completeness"
+        criteria:
+          min_completeness: 0.8
+        required: true
+
+communication:
+  a2a:
+    protocol: "trpc"
+    timeout: 10s
+    retries: 3
+
+  streaming:
+    enabled: true
+    buffer_size: 1000
+
+tools:
+  jira:
+    base_url: "${JIRA_BASE_URL}"
+    rate_limit:
+      requests_per_minute: 100
+    cache:
+      ttl: 5m
+
+  slack:
+    rate_limit:
+      tier: "tier3"
+    pagination:
+      limit: 200
+
+  github:
+    rate_limit:
+      requests_per_hour: 5000
+      remaining_threshold: 100
+    cache:
+      ttl: 10m
+
+database:
+  url: "${DATABASE_URL}"
+  redis_url: "${REDIS_URL}"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 5m
+
+logging:
+  level: "info"
+  format: "json"
+  output: ["stdout"]
+  file: ""
+  development: true

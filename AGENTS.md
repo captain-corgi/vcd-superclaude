@@ -1,5 +1,7 @@
 # AGENTS.md
 
+- Your tasks to follow here: `docs/tasks.md`
+
 ## Setup commands
 - Install deps: `go mod download && go mod tidy`
 - Start dev server: `make dev` or `go run cmd/server/main.go`
