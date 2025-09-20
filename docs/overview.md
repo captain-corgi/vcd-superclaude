@@ -1,6 +1,6 @@
-# Multi-Agent System
+# Multi-Agent System Overview
 
-A hierarchical multi-agent system built with Go for automated data collection and report generation from Jira, Slack, and GitHub.
+A hierarchical multi-agent system built with Genkit Go for automated data collection and report generation from Jira, Slack, and GitHub.
 
 ## 🎯 Project Vision
 
@@ -181,48 +181,25 @@ sequenceDiagram
 
 ## 🚀 Getting Started
 
-### Prerequisites
-- Go 1.21+
-- Docker & Docker Compose
-- PostgreSQL (optional, can use SQLite for development)
-- Redis (optional, can use in-memory cache for development)
-
-### Installation
-
-1. **Clone the repository**
+1. **Setup Development Environment**
    ```bash
-   git clone https://github.com/your-username/multi-agent-system.git
+   git clone <repository>
    cd multi-agent-system
+   make setup
    ```
 
-2. **Setup Development Environment**
+2. **Configure Environment**
    ```bash
-   # Copy environment variables
    cp .env.example .env
-
-   # Edit environment variables if needed
-   nano .env
+   # Edit environment variables
    ```
 
-3. **Install Dependencies**
+3. **Run Development Server**
    ```bash
-   # Download Go modules
-   go mod download
-
-   # Tidy dependencies
-   go mod tidy
+   make dev
    ```
 
-4. **Run Development Server**
-   ```bash
-   # Option 1: Run directly with Go
-   go run cmd/server/main.go
-
-   # Option 2: Run with Docker Compose
-   docker-compose -f docker/docker-compose.dev.yml up -d
-   ```
-
-5. **Access Web Interface**
+4. **Access Web Interface**
    - Open `http://localhost:8080` in browser
    - Submit data collection requests
    - Monitor real-time progress
@@ -253,100 +230,22 @@ multi-agent-system/
 │   ├── models/
 │   ├── storage/
 │   └── config/
-├── configs/
-│   ├── app.yaml
-│   ├── database.yaml
-│   └── logging.yaml
-├── docker/
-│   ├── Dockerfile
-│   ├── docker-compose.yml
-│   └── docker-compose.dev.yml
 ├── docs/
-├── scripts/
-├── .env.example
-├── .gitignore
-├── go.mod
-├── go.sum
-├── Makefile
-└── README.md
+├── configs/
+├── docker/
+└── Makefile
 ```
 
 ## 🔄 Development Workflow
 
-### Available Commands
-
-```bash
-# Development setup
-make dev-setup        # Setup development environment
-make dev             # Start development environment with Docker
-make dev-logs        # Show development environment logs
-
-# Application commands
-make build          # Build the application
-make run            # Run the application
-make test           # Run tests
-make test-coverage  # Run tests with coverage
-
-# Docker commands
-make docker-build   # Build Docker image
-make docker-up      # Start Docker Compose
-make docker-down    # Stop Docker Compose
-make docker-logs    # Show Docker Compose logs
-
-# Quality checks
-make fmt            # Format code
-make lint           # Lint code
-make security       # Run security scan
-make check          # Run all checks
-
-# Database
-make migrate-up     # Run database migrations
-make migrate-down   # Rollback database migrations
-
-# Documentation
-make docs           # Generate documentation
-```
-
-### Environment Configuration
-
-```bash
-# .env.example
-APP_ENV=development
-APP_PORT=8080
-APP_DEBUG=true
-
-# Database
-DATABASE_URL=postgres://postgres:password@localhost:5432/multiagent?sslmode=disable
-DB_MAX_CONNECTIONS=25
-DB_MAX_IDLE_CONNECTIONS=5
-DB_CONNECTION_LIFETIME=5m
-
-# Redis
-REDIS_URL=redis://localhost:6379
-REDIS_PASSWORD=
-
-# API Credentials
-JIRA_BASE_URL=https://your-domain.atlassian.net
-JIRA_CLIENT_ID=your-client-id
-JIRA_CLIENT_SECRET=your-client-secret
-
-SLACK_CLIENT_ID=your-client-id
-SLACK_CLIENT_SECRET=your-client-secret
-
-GITHUB_TOKEN=your-personal-access-token
-
-# Agent Configuration
-PLANNER_ENABLED=true
-PLANNER_MAX_REQUESTS=10
-PLANNER_TIMEOUT=30s
-
-EXECUTOR_ENABLED=true
-EXECUTOR_RATE_LIMIT=100
-EXECUTOR_RETRY_COUNT=3
-
-EVALUATOR_ENABLED=true
-EVALUATOR_CACHE_TTL=1h
-EVALUATOR_MAX_REPORT_SIZE=10MB
+```mermaid
+graph LR
+    A[Local Development] --> B[Docker Compose]
+    B --> C[Agent Implementation]
+    C --> D[API Integration]
+    D --> E[Testing]
+    E --> F[Documentation]
+    F --> G[Deployment]
 ```
 
 ## 📈 Success Metrics
@@ -368,131 +267,3 @@ EVALUATOR_MAX_REPORT_SIZE=10MB
 - Report generation accuracy
 - Error handling clarity
 - Interface usability
-
-## 🧪 Testing
-
-The project includes comprehensive testing:
-
-- **Unit Tests**: Individual component testing
-- **Integration Tests**: Agent workflow testing
-- **Performance Tests**: Response time and resource usage
-- **E2E Tests**: Complete user workflow testing
-
-Run tests with:
-```bash
-make test           # Run all tests
-make test-coverage  # Run with coverage report
-```
-
-## 🔧 Configuration
-
-### Application Configuration
-The application uses YAML configuration files in `configs/`:
-
-- `app.yaml`: Application settings
-- `database.yaml`: Database and Redis configuration
-- `logging.yaml`: Logging configuration
-
-### API Configuration
-External API configuration supports:
-
-- **Authentication**: OAuth2, API keys, bearer tokens
-- **Rate Limiting**: Configurable per-API limits
-- **Caching**: TTL-based caching strategies
-- **Retries**: Exponential backoff retry logic
-
-## 📊 Monitoring & Health Checks
-
-### Health Endpoints
-- `GET /health` - Basic health check
-- `GET /health/detailed` - Detailed health status
-- `GET /ready` - Readiness check
-- `GET /live` - Liveness check
-- `GET /metrics` - System metrics
-
-### Logging
-Structured logging with Zap logger:
-- JSON format for machine parsing
-- Multiple log levels (debug, info, warn, error)
-- Request/response tracing
-- Error context and stack traces
-
-## 🚨 Troubleshooting
-
-### Common Issues
-
-#### Database Connection Issues
-```bash
-# Check PostgreSQL logs
-docker-compose logs postgres
-
-# Test database connection
-docker-compose exec postgres psql -U postgres -d multiagent -c "SELECT 1"
-```
-
-#### Redis Connection Issues
-```bash
-# Check Redis logs
-docker-compose logs redis
-
-# Test Redis connection
-docker-compose exec redis redis-cli ping
-```
-
-#### Application Issues
-```bash
-# Check application logs
-docker-compose logs app
-
-# Restart application
-docker-compose restart app
-
-# Debug mode
-docker-compose -f docker/docker-compose.dev.yml up --build
-```
-
-### Performance Optimization
-
-#### Database Optimization
-- Configure connection pooling
-- Optimize query performance
-- Implement proper indexing
-
-#### Redis Optimization
-- Set memory limits
-- Configure eviction policies
-- Use appropriate data structures
-
-#### Application Optimization
-- Configure Go runtime parameters
-- Implement proper caching strategies
-- Optimize API call patterns
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Run the test suite
-6. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-This project demonstrates modern Go development practices including:
-- Clean architecture and separation of concerns
-- Comprehensive error handling
-- Real-time communication patterns
-- External API integration best practices
-- Containerized deployment strategies
-
-## 📚 Additional Resources
-
-- [Go Documentation](https://go.dev/doc/)
-- [Echo Framework Documentation](https://echo.labstack.com/docs/)
-- [Docker Documentation](https://docs.docker.com/)
-- [PostgreSQL Documentation](https://www.postgresql.org/docs/)
