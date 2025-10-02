@@ -23,6 +23,7 @@ type OIDCProvider interface {
 	ExchangeCode(ctx context.Context, code string) (*TokenInfo, error)
 	VerifyToken(ctx context.Context, token string) (*UserInfo, error)
 	GetProviderName() string
+	ValidateDomain(email string) error
 }
 
 // TokenInfo represents the token information from OIDC

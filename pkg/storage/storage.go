@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	_ "github.com/lib/pq"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/captain-corgi/multi-agent-system/pkg/audit"
 	"github.com/captain-corgi/multi-agent-system/pkg/models"
@@ -333,6 +336,34 @@ func (s *Storage) InitializeSchema() error {
 		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 	);
 
+	CREATE TABLE IF NOT EXISTS roles (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		name VARCHAR(50) UNIQUE NOT NULL,
+		description TEXT,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS user_roles (
+		user_id UUID NOT NULL,
+		role_id UUID NOT NULL,
+		assigned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (user_id, role_id),
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS personal_access_tokens (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		user_id UUID NOT NULL,
+		name VARCHAR(255) NOT NULL,
+		token_prefix VARCHAR(32) NOT NULL UNIQUE,
+		token_hash VARCHAR(255) NOT NULL,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		last_used_at TIMESTAMP,
+		expires_at TIMESTAMP,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 	CREATE INDEX IF NOT EXISTS idx_responses_timestamp ON responses(timestamp);
@@ -346,6 +377,12 @@ func (s *Storage) InitializeSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 	CREATE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub);
 	CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at);
+	CREATE INDEX IF NOT EXISTS idx_roles_name ON roles(name);
+	CREATE INDEX IF NOT EXISTS idx_user_roles_user_id ON user_roles(user_id);
+	CREATE INDEX IF NOT EXISTS idx_user_roles_role_id ON user_roles(role_id);
+	CREATE INDEX IF NOT EXISTS idx_personal_access_tokens_user_id ON personal_access_tokens(user_id);
+	CREATE INDEX IF NOT EXISTS idx_personal_access_tokens_token_prefix ON personal_access_tokens(token_prefix);
+	CREATE INDEX IF NOT EXISTS idx_personal_access_tokens_expires_at ON personal_access_tokens(expires_at);
 `
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -714,6 +751,368 @@ func (s *Storage) CleanupExpiredSessions(ctx context.Context) (int64, error) {
 	result, err := s.db.ExecContext(ctx, query)
 	if err != nil {
 		return 0, fmt.Errorf("failed to cleanup expired sessions: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	return rowsAffected, nil
+}
+
+// Role-related database operations
+
+// SeedRoles creates the default system roles if they don't exist
+func (s *Storage) SeedRoles(ctx context.Context) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	roles := []models.Role{
+		{
+			Name:        "admin",
+			Description: "Full system administrator with access to all features and admin endpoints",
+		},
+		{
+			Name:        "maintainer",
+			Description: "Can manage most system resources but not admin functions",
+		},
+		{
+			Name:        "viewer",
+			Description: "Read-only access to most system resources",
+		},
+		{
+			Name:        "audit_reader",
+			Description: "Can access audit logs and events",
+		},
+	}
+
+	for _, role := range roles {
+		query := `
+			INSERT INTO roles (name, description)
+			VALUES ($1, $2)
+			ON CONFLICT (name) DO NOTHING
+		`
+
+		_, err := s.db.ExecContext(ctx, query, role.Name, role.Description)
+		if err != nil {
+			return fmt.Errorf("failed to seed role %s: %w", role.Name, err)
+		}
+	}
+
+	return nil
+}
+
+// CreateRole creates a new role (for future extensibility)
+func (s *Storage) CreateRole(ctx context.Context, role *models.Role) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		INSERT INTO roles (name, description)
+		VALUES ($1, $2)
+		RETURNING id, created_at
+	`
+
+	err := s.db.QueryRowContext(ctx, query, role.Name, role.Description).Scan(&role.ID, &role.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to create role: %w", err)
+	}
+
+	return nil
+}
+
+// GetRoleByName retrieves a role by its name
+func (s *Storage) GetRoleByName(ctx context.Context, name string) (*models.Role, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT id, name, description, created_at
+		FROM roles WHERE name = $1
+	`
+
+	role := &models.Role{}
+	err := s.db.QueryRowContext(ctx, query, name).Scan(
+		&role.ID, &role.Name, &role.Description, &role.CreatedAt)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get role by name: %w", err)
+	}
+
+	return role, nil
+}
+
+// AssignRoleToUser assigns a role to a user
+func (s *Storage) AssignRoleToUser(ctx context.Context, userID, roleID string) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		INSERT INTO user_roles (user_id, role_id)
+		VALUES ($1, $2)
+		ON CONFLICT (user_id, role_id) DO NOTHING
+	`
+
+	_, err := s.db.ExecContext(ctx, query, userID, roleID)
+	if err != nil {
+		return fmt.Errorf("failed to assign role to user: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveRoleFromUser removes a role from a user
+func (s *Storage) RemoveRoleFromUser(ctx context.Context, userID, roleID string) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2`
+
+	_, err := s.db.ExecContext(ctx, query, userID, roleID)
+	if err != nil {
+		return fmt.Errorf("failed to remove role from user: %w", err)
+	}
+
+	return nil
+}
+
+// GetUserRoles retrieves all roles for a user
+func (s *Storage) GetUserRoles(ctx context.Context, userID string) ([]models.Role, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT r.id, r.name, r.description, r.created_at
+		FROM roles r
+		JOIN user_roles ur ON r.id = ur.role_id
+		WHERE ur.user_id = $1
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user roles: %w", err)
+	}
+	defer rows.Close()
+
+	var roles []models.Role
+	for rows.Next() {
+		var role models.Role
+		err := rows.Scan(&role.ID, &role.Name, &role.Description, &role.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan role: %w", err)
+		}
+		roles = append(roles, role)
+	}
+
+	return roles, nil
+}
+
+// GetUserRoleNames retrieves just the role names for a user (more efficient for authorization checks)
+func (s *Storage) GetUserRoleNames(ctx context.Context, userID string) ([]string, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT r.name
+		FROM roles r
+		JOIN user_roles ur ON r.id = ur.role_id
+		WHERE ur.user_id = $1
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user role names: %w", err)
+	}
+	defer rows.Close()
+
+	var roleNames []string
+	for rows.Next() {
+		var name string
+		err := rows.Scan(&name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan role name: %w", err)
+		}
+		roleNames = append(roleNames, name)
+	}
+
+	return roleNames, nil
+}
+
+// Personal Access Token-related database operations
+
+// CreatePersonalAccessToken creates a new personal access token with bcrypt hash
+func (s *Storage) CreatePersonalAccessToken(ctx context.Context, token *models.PersonalAccessToken) (string, error) {
+	if s.db == nil {
+		return "", fmt.Errorf("database not initialized")
+	}
+
+	// Generate a random token (64 bytes = 128 hex chars)
+	tokenBytes := make([]byte, 64)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", fmt.Errorf("failed to generate token: %w", err)
+	}
+	plainToken := hex.EncodeToString(tokenBytes)
+
+	// Hash the token using bcrypt
+	hashedToken, err := bcrypt.GenerateFromPassword([]byte(plainToken), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("failed to hash token: %w", err)
+	}
+
+	// Use first 32 characters as prefix for display
+	token.TokenPrefix = plainToken[:32]
+	token.TokenHash = string(hashedToken)
+
+	query := `
+		INSERT INTO personal_access_tokens (user_id, name, token_prefix, token_hash, expires_at)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, created_at
+	`
+
+	err = s.db.QueryRowContext(ctx, query,
+		token.UserID, token.Name, token.TokenPrefix, token.TokenHash, token.ExpiresAt).Scan(&token.ID, &token.CreatedAt)
+
+	if err != nil {
+		return "", fmt.Errorf("failed to create personal access token: %w", err)
+	}
+
+	return plainToken, nil
+}
+
+// GetPersonalAccessTokenByPrefix retrieves a token by its prefix for authentication
+func (s *Storage) GetPersonalAccessTokenByPrefix(ctx context.Context, tokenPrefix string) (*models.PersonalAccessToken, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT id, user_id, name, token_prefix, token_hash, created_at, last_used_at, expires_at
+		FROM personal_access_tokens
+		WHERE token_prefix = $1
+	`
+
+	token := &models.PersonalAccessToken{}
+	var lastUsedAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, query, tokenPrefix).Scan(
+		&token.ID, &token.UserID, &token.Name, &token.TokenPrefix,
+		&token.TokenHash, &token.CreatedAt, &lastUsedAt, &token.ExpiresAt)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get personal access token: %w", err)
+	}
+
+	if lastUsedAt.Valid {
+		token.LastUsedAt = &lastUsedAt.Time
+	}
+
+	return token, nil
+}
+
+// UpdatePersonalAccessTokenLastUsed updates the last_used_at timestamp
+func (s *Storage) UpdatePersonalAccessTokenLastUsed(ctx context.Context, tokenID string) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		UPDATE personal_access_tokens
+		SET last_used_at = NOW()
+		WHERE id = $1
+	`
+
+	_, err := s.db.ExecContext(ctx, query, tokenID)
+	if err != nil {
+		return fmt.Errorf("failed to update token last used: %w", err)
+	}
+
+	return nil
+}
+
+// ListPersonalAccessTokens retrieves all tokens for a user
+func (s *Storage) ListPersonalAccessTokens(ctx context.Context, userID string) ([]models.PersonalAccessToken, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT id, user_id, name, token_prefix, created_at, last_used_at, expires_at
+		FROM personal_access_tokens
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list personal access tokens: %w", err)
+	}
+	defer rows.Close()
+
+	var tokens []models.PersonalAccessToken
+	for rows.Next() {
+		var token models.PersonalAccessToken
+		var lastUsedAt sql.NullTime
+		err := rows.Scan(
+			&token.ID, &token.UserID, &token.Name, &token.TokenPrefix,
+			&token.CreatedAt, &lastUsedAt, &token.ExpiresAt)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan token: %w", err)
+		}
+
+		if lastUsedAt.Valid {
+			token.LastUsedAt = &lastUsedAt.Time
+		}
+
+		tokens = append(tokens, token)
+	}
+
+	return tokens, nil
+}
+
+// DeletePersonalAccessToken removes a personal access token
+func (s *Storage) DeletePersonalAccessToken(ctx context.Context, tokenID string) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `DELETE FROM personal_access_tokens WHERE id = $1`
+
+	result, err := s.db.ExecContext(ctx, query, tokenID)
+	if err != nil {
+		return fmt.Errorf("failed to delete personal access token: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("token not found")
+	}
+
+	return nil
+}
+
+// CleanupExpiredPersonalAccessTokens removes expired tokens
+func (s *Storage) CleanupExpiredPersonalAccessTokens(ctx context.Context) (int64, error) {
+	if s.db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	query := `DELETE FROM personal_access_tokens WHERE expires_at IS NOT NULL AND expires_at < NOW()`
+
+	result, err := s.db.ExecContext(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup expired personal access tokens: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()

@@ -65,9 +65,10 @@ type CommunicationConfig struct {
 }
 
 type A2AConfig struct {
-	Protocol string        `mapstructure:"protocol"`
-	Timeout  time.Duration `mapstructure:"timeout"`
-	Retries  int           `mapstructure:"retries"`
+	Protocol     string        `mapstructure:"protocol"`
+	Timeout      time.Duration `mapstructure:"timeout"`
+	Retries      int           `mapstructure:"retries"`
+	ServiceToken string        `mapstructure:"service_token"`
 }
 
 type StreamingConfig struct {
@@ -165,8 +166,10 @@ type AuditFileSink struct {
 }
 
 type AuthConfig struct {
-	Providers ProvidersConfig `mapstructure:"providers"`
-	Session   SessionConfig   `mapstructure:"session"`
+	Providers            ProvidersConfig `mapstructure:"providers"`
+	Session              SessionConfig   `mapstructure:"session"`
+	CSRF                 CSRFConfig      `mapstructure:"csrf"`
+	BootstrapAdminEmails []string        `mapstructure:"bootstrap_admin_emails"`
 }
 
 type ProvidersConfig struct {
@@ -188,6 +191,14 @@ type SessionConfig struct {
 	SameSite   string        `mapstructure:"samesite"` // lax/strict/none
 }
 
+type CSRFConfig struct {
+	Secret         string        `mapstructure:"secret"`
+	CookieName     string        `mapstructure:"cookie_name"`
+	CookieSameSite string        `mapstructure:"cookie_samesite"`
+	TokenLength    int           `mapstructure:"token_length"`
+	TokenTTL       time.Duration `mapstructure:"token_ttl"`
+}
+
 func Load(configPath string) (*Config, error) {
 	viper.SetConfigFile(configPath)
 	viper.AutomaticEnv()
@@ -202,6 +213,11 @@ func Load(configPath string) (*Config, error) {
 	viper.SetDefault("auth.session.secure", false)
 	viper.SetDefault("auth.session.ttl", "24h")
 	viper.SetDefault("auth.session.samesite", "lax")
+	viper.SetDefault("auth.csrf.secret", "your-csrf-secret-key")
+	viper.SetDefault("auth.csrf.cookie_name", "csrf_token")
+	viper.SetDefault("auth.csrf.cookie_samesite", "lax")
+	viper.SetDefault("auth.csrf.token_length", 32)
+	viper.SetDefault("auth.csrf.token_ttl", "1h")
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("failed to read config: %w", err)
@@ -261,6 +277,26 @@ func LoadFromEnv() (*Config, error) {
 				Secure:     getEnvBool("AUTH_COOKIE_SECURE", false),
 				TTL:        getEnvDuration("AUTH_SESSION_TTL", 24*time.Hour),
 				SameSite:   getEnvString("AUTH_COOKIE_SAMESITE", "lax"),
+			},
+			CSRF: CSRFConfig{
+				Secret:         getEnvString("AUTH_CSRF_SECRET", "your-csrf-secret-key"),
+				CookieName:     getEnvString("AUTH_CSRF_COOKIE_NAME", "csrf_token"),
+				CookieSameSite: getEnvString("AUTH_CSRF_COOKIE_SAMESITE", "lax"),
+				TokenLength:    getEnvInt("AUTH_CSRF_TOKEN_LENGTH", 32),
+				TokenTTL:       getEnvDuration("AUTH_CSRF_TOKEN_TTL", time.Hour),
+			},
+			BootstrapAdminEmails: getEnvStringSlice("AUTH_BOOTSTRAP_ADMIN_EMAILS", []string{}),
+		},
+		Communication: CommunicationConfig{
+			A2A: A2AConfig{
+				Protocol:     getEnvString("COMMUNICATION_A2A_PROTOCOL", "http"),
+				Timeout:      getEnvDuration("COMMUNICATION_A2A_TIMEOUT", 30*time.Second),
+				Retries:      getEnvInt("COMMUNICATION_A2A_RETRIES", 3),
+				ServiceToken: getEnvString("COMMUNICATION_A2A_SERVICE_TOKEN", ""),
+			},
+			Streaming: StreamingConfig{
+				Enabled:    getEnvBool("COMMUNICATION_STREAMING_ENABLED", true),
+				BufferSize: getEnvInt("COMMUNICATION_STREAMING_BUFFER_SIZE", 100),
 			},
 		},
 	}
