@@ -38,6 +38,7 @@ graph TB
     subgraph "Data Layer"
         STORAGE[Message Persistence]
         CACHE[Data Caching]
+        AUDIT[Audit Trail]
     end
 
     UI --> PLANNER
@@ -229,12 +230,47 @@ multi-agent-system/
 ├── pkg/
 │   ├── models/
 │   ├── storage/
-│   └── config/
+│   ├── config/
+│   ├── logger/
+│   ├── audit/
+│   └── metrics/
 ├── docs/
 ├── configs/
 ├── docker/
 └── Makefile
 ```
+
+## 🔍 Audit and Logging System
+
+The system includes a comprehensive audit and logging system that provides:
+
+### Structured Logging
+- **Configurable levels**: debug, info, warn, error
+- **Multiple outputs**: stdout, file
+- **Formats**: JSON (production) and console (development)
+- **Automatic rotation**: File logs with size and age limits
+- **Datadog compatibility**: Optional Datadog-standard field names and APM correlation
+
+### Audit Trail
+- **HTTP Requests**: All mutating operations (POST, PUT, PATCH, DELETE)
+- **Agent Actions**: Lifecycle events, task executions, communications
+- **External APIs**: Jira, Slack, GitHub API calls
+- **Data Redaction**: Automatic removal of sensitive information
+- **Retention**: Configurable data retention with automatic cleanup
+
+### Key Features
+- **Real-time Metrics**: Performance and usage statistics
+- **Query APIs**: RESTful endpoints for audit data retrieval
+- **Security**: Automatic redaction of passwords, tokens, and sensitive data
+- **Performance**: Async processing with buffering and backpressure handling
+
+### Datadog Integration
+- **Standard field names**: Compatible with Datadog log parsing
+- **APM correlation**: Trace and span ID injection for log-trace correlation
+- **Service tagging**: Automatic service, environment, and version tagging
+- **Docker integration**: Ready for Datadog Agent log collection
+
+For detailed documentation, see [Audit and Logging System](audit.md).
 
 ## 🔄 Development Workflow
 

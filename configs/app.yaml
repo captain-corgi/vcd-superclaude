@@ -71,7 +71,31 @@ database:
 
 logging:
   level: "info"
-  format: "json"
-  output: ["stdout"]
-  file: ""
+  format: "json" # json | console
+  output: ["stdout"] # stdout, file
+  file: "" # e.g., logs/app.log
   development: true
+  datadog:
+    enabled: false
+    inject_apm: true
+    service: "" # override service name (defaults to app.name)
+    env: "" # override environment (defaults to DD_ENV)
+    version: "" # override version (defaults to DD_VERSION)
+
+audit:
+  enabled: true
+  expose_endpoints: true
+  categories:
+    http: true
+    agent: true
+    external: true
+  retention_days: 90
+  redact:
+    deny_keys: ["password", "token", "authorization", "cookie", "email"]
+  file_sink:
+    enabled: false
+    path: logs/audit.log
+    max_size_mb: 100
+    max_backups: 5
+    max_age_days: 30
+    compress: true

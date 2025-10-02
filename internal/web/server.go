@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -13,20 +14,24 @@ import (
 
 	"github.com/captain-corgi/multi-agent-system/internal/agents"
 	"github.com/captain-corgi/multi-agent-system/internal/communication/streaming"
+	"github.com/captain-corgi/multi-agent-system/pkg/audit"
 	"github.com/captain-corgi/multi-agent-system/pkg/config"
+	"github.com/captain-corgi/multi-agent-system/pkg/metrics"
 	"github.com/captain-corgi/multi-agent-system/pkg/storage"
 )
 
 type Server struct {
-	echo      *echo.Echo
-	config    *config.Config
-	storage   *storage.Storage
-	streamer  *streaming.Streamer
-	logger    *zap.Logger
-	upgrader  *websocket.Upgrader
-	startTime time.Time
-	mu        sync.RWMutex
-	agents    map[string]agents.Agent
+	echo          *echo.Echo
+	config        *config.Config
+	storage       *storage.Storage
+	streamer      *streaming.Streamer
+	logger        *zap.Logger
+	upgrader      *websocket.Upgrader
+	startTime     time.Time
+	mu            sync.RWMutex
+	agents        map[string]agents.Agent
+	auditRecorder audit.AuditRecorder
+	retentionJob  *RetentionJob
 }
 
 type ServerStats struct {
@@ -55,6 +60,11 @@ func NewServer(cfg *config.Config, storage *storage.Storage, logger *zap.Logger)
 	e.Debug = cfg.App.Debug
 	e.HTTPErrorHandler = customHTTPErrorHandler
 
+	// Setup middleware
+	e.Use(RequestIDMiddleware())
+	e.Use(AccessLogMiddleware(logger))
+	e.Use(AuditContextMiddleware())
+
 	server := &Server{
 		echo:      e,
 		config:    cfg,
@@ -64,6 +74,32 @@ func NewServer(cfg *config.Config, storage *storage.Storage, logger *zap.Logger)
 		upgrader:  &upgrader,
 		startTime: time.Now(),
 		agents:    make(map[string]agents.Agent),
+	}
+
+	// Setup audit middleware if enabled
+	if cfg.Audit.Enabled {
+		// Create audit recorder
+		redactor := audit.NewRedactor(cfg.Audit.Redact.DenyKeys)
+		recorder := audit.NewRecorder(storage, redactor, logger, 1000)
+
+		// Start the recorder
+		ctx := context.Background()
+		recorder.Start(ctx)
+
+		// Add audit middleware
+		e.Use(AuditMiddleware(recorder, &cfg.Audit, logger))
+
+		// Store recorder in server for cleanup
+		server.auditRecorder = recorder
+
+		// Setup retention job if retention is enabled
+		if cfg.Audit.RetentionDays > 0 {
+			retentionJob := NewRetentionJob(storage, cfg.Audit.RetentionDays, logger)
+			server.retentionJob = retentionJob
+
+			// Start retention job in background
+			go retentionJob.Start(ctx)
+		}
 	}
 
 	server.setupRoutes()
@@ -93,6 +129,12 @@ func (s *Server) setupRoutes() {
 	api.GET("/metrics", s.getMetrics)
 	api.GET("/config", s.getConfig)
 
+	// Audit routes (if enabled)
+	if s.config.Audit.Enabled && s.config.Audit.ExposeEndpoints {
+		api.GET("/audit/events", s.listAuditEvents)
+		api.GET("/audit/events/:id", s.getAuditEvent)
+	}
+
 	// WebSocket route
 	s.echo.GET("/ws", s.websocketHandler)
 
@@ -114,6 +156,19 @@ func (s *Server) Start(address string) error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down server")
+
+	// Stop retention job if it exists
+	if s.retentionJob != nil {
+		s.retentionJob.Stop()
+	}
+
+	// Close audit recorder if it exists
+	if s.auditRecorder != nil {
+		if err := s.auditRecorder.Close(); err != nil {
+			s.logger.Error("Failed to close audit recorder", zap.Error(err))
+		}
+	}
+
 	return s.echo.Shutdown(ctx)
 }
 
@@ -261,8 +316,28 @@ func (s *Server) getAgentMetrics(c echo.Context) error {
 }
 
 func (s *Server) getMetrics(c echo.Context) error {
-	stats := s.getServerMetrics()
-	return c.JSON(http.StatusOK, stats)
+	// Get application metrics
+	appMetrics := metrics.GetMetrics()
+
+	// Get server stats
+	serverStats := s.getServerStats()
+
+	// Get audit recorder metrics if available
+	var auditMetrics interface{}
+	if s.auditRecorder != nil {
+		if recorder, ok := s.auditRecorder.(*audit.Recorder); ok {
+			auditMetrics = recorder.GetMetrics()
+		}
+	}
+
+	response := map[string]interface{}{
+		"application": appMetrics,
+		"server":      serverStats,
+		"audit":       auditMetrics,
+		"timestamp":   time.Now(),
+	}
+
+	return c.JSON(http.StatusOK, response)
 }
 
 func (s *Server) getConfig(c echo.Context) error {
@@ -490,4 +565,99 @@ func customHTTPErrorHandler(err error, c echo.Context) {
 		"method":    c.Request().Method,
 		"timestamp": time.Now(),
 	})
+}
+
+// Audit endpoint handlers
+
+// listAuditEvents handles GET /api/audit/events
+func (s *Server) listAuditEvents(c echo.Context) error {
+	// Parse query parameters
+	filter := audit.AuditFilter{}
+	pagination := audit.Pagination{Page: 1, PageSize: 10}
+
+	// Category filter
+	if category := c.QueryParam("category"); category != "" {
+		filter.Category = &category
+	}
+
+	// Actor ID filter
+	if actorID := c.QueryParam("actor_id"); actorID != "" {
+		filter.ActorID = &actorID
+	}
+
+	// Action filter
+	if action := c.QueryParam("action"); action != "" {
+		filter.Action = &action
+	}
+
+	// Resource filter
+	if resource := c.QueryParam("resource"); resource != "" {
+		filter.Resource = &resource
+	}
+
+	// Success filter
+	if success := c.QueryParam("success"); success != "" {
+		if successBool, err := strconv.ParseBool(success); err == nil {
+			filter.Success = &successBool
+		}
+	}
+
+	// Date range filters
+	if startDate := c.QueryParam("start_date"); startDate != "" {
+		if t, err := time.Parse(time.RFC3339, startDate); err == nil {
+			filter.StartDate = &t
+		}
+	}
+
+	if endDate := c.QueryParam("end_date"); endDate != "" {
+		if t, err := time.Parse(time.RFC3339, endDate); err == nil {
+			filter.EndDate = &t
+		}
+	}
+
+	// Pagination
+	if page := c.QueryParam("page"); page != "" {
+		if p, err := strconv.Atoi(page); err == nil && p > 0 {
+			pagination.Page = p
+		}
+	}
+
+	if pageSize := c.QueryParam("page_size"); pageSize != "" {
+		if ps, err := strconv.Atoi(pageSize); err == nil && ps > 0 && ps <= 100 {
+			pagination.PageSize = ps
+		}
+	}
+
+	// Query audit events
+	events, page, err := s.storage.ListAuditEvents(c.Request().Context(), filter, pagination)
+	if err != nil {
+		s.logger.Error("Failed to list audit events", zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to retrieve audit events",
+		})
+	}
+
+	response := map[string]interface{}{
+		"events": events,
+		"page":   page,
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
+// getAuditEvent handles GET /api/audit/events/:id
+func (s *Server) getAuditEvent(c echo.Context) error {
+	id := c.Param("id")
+
+	event, err := s.storage.GetAuditEvent(c.Request().Context(), id)
+	if err != nil {
+		s.logger.Error("Failed to get audit event",
+			zap.String("id", id),
+			zap.Error(err))
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error": "Audit event not found",
+		})
+	}
+
+	return c.JSON(http.StatusOK, event)
 }

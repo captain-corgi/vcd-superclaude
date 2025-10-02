@@ -15,6 +15,7 @@ import (
 	"github.com/captain-corgi/multi-agent-system/pkg/logger"
 	"github.com/captain-corgi/multi-agent-system/pkg/storage"
 	"go.uber.org/zap"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 func main() {
@@ -29,32 +30,61 @@ func main() {
 		log.Println("Using environment configuration")
 	}
 
-	// Initialize logger
-	logConfig := zap.NewProductionConfig()
-	if cfg.App.Debug {
-		logConfig.Development = true
-		logConfig.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
+	// Initialize logger from config
+	var appLogger *logger.Logger
+	if cfg.Logging.Datadog.Enabled {
+		appLogger = logger.NewDatadogLogger(cfg.Logging, cfg.App)
 	} else {
-		logConfig.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
+		appLogger = logger.NewFromConfig(
+			cfg.Logging.Level,
+			cfg.Logging.Format,
+			cfg.Logging.Output,
+			cfg.Logging.File,
+			cfg.Logging.Development,
+		)
 	}
+	defer appLogger.Sync()
 
-	logger := logger.NewWithConfig(logConfig)
-	defer logger.Sync()
+	// Start Datadog tracer if enabled
+	if cfg.Logging.Datadog.Enabled && cfg.Logging.Datadog.InjectAPM {
+		// Set environment variables for tracer
+		if cfg.Logging.Datadog.Service != "" {
+			os.Setenv("DD_SERVICE", cfg.Logging.Datadog.Service)
+		}
+		if cfg.Logging.Datadog.Env != "" {
+			os.Setenv("DD_ENV", cfg.Logging.Datadog.Env)
+		}
+		if cfg.Logging.Datadog.Version != "" {
+			os.Setenv("DD_VERSION", cfg.Logging.Datadog.Version)
+		}
+
+		// Start tracer
+		tracer.Start(
+			tracer.WithService(cfg.App.Name),
+			tracer.WithEnv(cfg.Logging.Datadog.Env),
+		)
+		defer tracer.Stop()
+
+		appLogger.Info("Datadog tracer started",
+			zap.String("service", cfg.App.Name),
+			zap.String("env", cfg.Logging.Datadog.Env),
+			zap.String("version", cfg.Logging.Datadog.Version))
+	}
 
 	// Initialize storage
 	storage, err := storage.NewStorage(
 		cfg.Database.URL,
 		cfg.Database.RedisURL,
-		logger.Zap(),
+		appLogger.Zap(),
 	)
 	if err != nil {
-		logger.Zap().Fatal("Failed to initialize storage",
+		appLogger.Zap().Fatal("Failed to initialize storage",
 			zap.Error(err))
 	}
 	defer storage.Close()
 
 	// Initialize web server
-	server := web.NewServer(cfg, storage, logger.Zap())
+	server := web.NewServer(cfg, storage, appLogger.Zap())
 
 	// Setup graceful shutdown
 	shutdown := make(chan os.Signal, 1)
@@ -63,7 +93,7 @@ func main() {
 	// Start server in goroutine
 	serverErrors := make(chan error, 1)
 	go func() {
-		logger.Info("Starting server",
+		appLogger.Info("Starting server",
 			zap.String("app", cfg.App.Name),
 			zap.String("version", cfg.App.Version),
 			zap.Int("port", cfg.App.Port),
@@ -79,10 +109,10 @@ func main() {
 	// Wait for shutdown signal
 	select {
 	case sig := <-shutdown:
-		logger.Info("Shutting down server...",
+		appLogger.Info("Shutting down server...",
 			zap.String("signal", sig.String()))
 	case err := <-serverErrors:
-		logger.Error("Server error",
+		appLogger.Error("Server error",
 			zap.Error(err))
 		return
 	}
@@ -91,11 +121,11 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	logger.Info("Shutting down server...")
+	appLogger.Info("Shutting down server...")
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Fatal("Server forced to shutdown",
+		appLogger.Fatal("Server forced to shutdown",
 			zap.Error(err))
 	}
 
-	logger.Info("Server exited gracefully")
+	appLogger.Info("Server exited gracefully")
 }

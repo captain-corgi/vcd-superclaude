@@ -3,12 +3,15 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/go-redis/redis/v8"
 	_ "github.com/lib/pq"
 	"go.uber.org/zap"
+
+	"github.com/captain-corgi/multi-agent-system/pkg/audit"
 )
 
 type Storage struct {
@@ -294,12 +297,32 @@ func (s *Storage) InitializeSchema() error {
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS audit_events (
+		id BIGSERIAL PRIMARY KEY,
+		event_id VARCHAR(255) UNIQUE,
+		category VARCHAR(32) NOT NULL,
+		action VARCHAR(128) NOT NULL,
+		actor_id VARCHAR(255),
+		actor_email VARCHAR(255),
+		source_ip INET,
+		resource VARCHAR(255),
+		request_id VARCHAR(255),
+		success BOOLEAN,
+		payload JSONB,
+		redacted BOOLEAN DEFAULT false,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 	CREATE INDEX IF NOT EXISTS idx_responses_timestamp ON responses(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_agent_metrics_agent_id ON agent_metrics(agent_id);
 	CREATE INDEX IF NOT EXISTS idx_agent_metrics_timestamp ON agent_metrics(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events(created_at);
+	CREATE INDEX IF NOT EXISTS idx_audit_events_category ON audit_events(category);
+	CREATE INDEX IF NOT EXISTS idx_audit_events_actor_id ON audit_events(actor_id);
+	CREATE INDEX IF NOT EXISTS idx_audit_events_request_id ON audit_events(request_id);
 `
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -312,4 +335,213 @@ func (s *Storage) InitializeSchema() error {
 
 	s.logger.Info("Database schema initialized successfully")
 	return nil
+}
+
+// InsertAuditEvent inserts an audit event into the database
+func (s *Storage) InsertAuditEvent(ctx context.Context, event audit.AuditEvent) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		INSERT INTO audit_events (
+			event_id, category, action, actor_id, actor_email, source_ip,
+			resource, request_id, success, payload, redacted, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`
+
+	var payloadJSON []byte
+	if event.Payload != nil {
+		payloadJSON, _ = json.Marshal(event.Payload)
+	}
+
+	_, err := s.db.ExecContext(ctx, query,
+		event.EventID, event.Category, event.Action, event.ActorID, event.ActorEmail,
+		event.SourceIP, event.Resource, event.RequestID, event.Success, payloadJSON,
+		event.Redacted, event.CreatedAt)
+
+	return err
+}
+
+// ListAuditEvents retrieves audit events with filtering and pagination
+func (s *Storage) ListAuditEvents(ctx context.Context, filter audit.AuditFilter, pagination audit.Pagination) ([]audit.AuditEvent, audit.Page, error) {
+	if s.db == nil {
+		return nil, audit.Page{}, fmt.Errorf("database not initialized")
+	}
+
+	// Build WHERE clause
+	whereClause := "WHERE 1=1"
+	args := []interface{}{}
+	argIndex := 1
+
+	if filter.Category != nil {
+		whereClause += fmt.Sprintf(" AND category = $%d", argIndex)
+		args = append(args, *filter.Category)
+		argIndex++
+	}
+
+	if filter.ActorID != nil {
+		whereClause += fmt.Sprintf(" AND actor_id = $%d", argIndex)
+		args = append(args, *filter.ActorID)
+		argIndex++
+	}
+
+	if filter.Action != nil {
+		whereClause += fmt.Sprintf(" AND action = $%d", argIndex)
+		args = append(args, *filter.Action)
+		argIndex++
+	}
+
+	if filter.Resource != nil {
+		whereClause += fmt.Sprintf(" AND resource = $%d", argIndex)
+		args = append(args, *filter.Resource)
+		argIndex++
+	}
+
+	if filter.Success != nil {
+		whereClause += fmt.Sprintf(" AND success = $%d", argIndex)
+		args = append(args, *filter.Success)
+		argIndex++
+	}
+
+	if filter.StartDate != nil {
+		whereClause += fmt.Sprintf(" AND created_at >= $%d", argIndex)
+		args = append(args, *filter.StartDate)
+		argIndex++
+	}
+
+	if filter.EndDate != nil {
+		whereClause += fmt.Sprintf(" AND created_at <= $%d", argIndex)
+		args = append(args, *filter.EndDate)
+		argIndex++
+	}
+
+	// Count total records
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM audit_events %s", whereClause)
+	var total int64
+	err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total)
+	if err != nil {
+		return nil, audit.Page{}, fmt.Errorf("failed to count audit events: %w", err)
+	}
+
+	// Calculate pagination
+	offset := (pagination.Page - 1) * pagination.PageSize
+	if pagination.Page < 1 {
+		pagination.Page = 1
+	}
+	if pagination.PageSize < 1 {
+		pagination.PageSize = 10
+	}
+
+	totalPages := int((total + int64(pagination.PageSize) - 1) / int64(pagination.PageSize))
+
+	// Build SELECT query with pagination
+	selectQuery := fmt.Sprintf(`
+		SELECT id, event_id, category, action, actor_id, actor_email, source_ip,
+		       resource, request_id, success, payload, redacted, created_at
+		FROM audit_events %s
+		ORDER BY created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argIndex, argIndex+1)
+
+	args = append(args, pagination.PageSize, offset)
+
+	rows, err := s.db.QueryContext(ctx, selectQuery, args...)
+	if err != nil {
+		return nil, audit.Page{}, fmt.Errorf("failed to query audit events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []audit.AuditEvent
+	for rows.Next() {
+		var event audit.AuditEvent
+		var payloadBytes []byte
+		err := rows.Scan(
+			&event.ID, &event.EventID, &event.Category, &event.Action,
+			&event.ActorID, &event.ActorEmail, &event.SourceIP, &event.Resource,
+			&event.RequestID, &event.Success, &payloadBytes, &event.Redacted,
+			&event.CreatedAt,
+		)
+		if err != nil {
+			return nil, audit.Page{}, fmt.Errorf("failed to scan audit event: %w", err)
+		}
+
+		// Unmarshal payload if present
+		if len(payloadBytes) > 0 {
+			json.Unmarshal(payloadBytes, &event.Payload)
+		}
+
+		events = append(events, event)
+	}
+
+	page := audit.Page{
+		Page:       pagination.Page,
+		PageSize:   pagination.PageSize,
+		Total:      total,
+		TotalPages: totalPages,
+	}
+
+	return events, page, nil
+}
+
+// GetAuditEvent retrieves a single audit event by ID or event_id
+func (s *Storage) GetAuditEvent(ctx context.Context, idOrEventID string) (audit.AuditEvent, error) {
+	if s.db == nil {
+		return audit.AuditEvent{}, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT id, event_id, category, action, actor_id, actor_email, source_ip,
+		       resource, request_id, success, payload, redacted, created_at
+		FROM audit_events
+		WHERE id = $1 OR event_id = $1
+	`
+
+	var event audit.AuditEvent
+	var payloadBytes []byte
+	err := s.db.QueryRowContext(ctx, query, idOrEventID).Scan(
+		&event.ID, &event.EventID, &event.Category, &event.Action,
+		&event.ActorID, &event.ActorEmail, &event.SourceIP, &event.Resource,
+		&event.RequestID, &event.Success, &payloadBytes, &event.Redacted,
+		&event.CreatedAt,
+	)
+
+	if err != nil {
+		return audit.AuditEvent{}, fmt.Errorf("failed to get audit event: %w", err)
+	}
+
+	// Unmarshal payload if present
+	if len(payloadBytes) > 0 {
+		json.Unmarshal(payloadBytes, &event.Payload)
+	}
+
+	return event, nil
+}
+
+// CleanupAuditEvents removes audit events older than the specified days
+func (s *Storage) CleanupAuditEvents(ctx context.Context, retentionDays int) (int64, error) {
+	if s.db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+
+	query := `
+		DELETE FROM audit_events 
+		WHERE created_at < NOW() - INTERVAL '%d days'
+	`
+
+	result, err := s.db.ExecContext(ctx, fmt.Sprintf(query, retentionDays))
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup audit events: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	return rowsAffected, nil
 }

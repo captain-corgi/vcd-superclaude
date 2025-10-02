@@ -51,23 +51,23 @@ type Response struct {
 }
 
 type Message struct {
-	ID          string        `json:"id"`
-	Type        MessageType   `json:"type"`
-	Content     interface{}   `json:"content"`
-	FromAgent   string        `json:"from_agent"`
-	ToAgent     string        `json:"to_agent"`
-	Timestamp   time.Time     `json:"timestamp"`
-	Correlation string        `json:"correlation_id"`
+	ID          string      `json:"id"`
+	Type        MessageType `json:"type"`
+	Content     interface{} `json:"content"`
+	FromAgent   string      `json:"from_agent"`
+	ToAgent     string      `json:"to_agent"`
+	Timestamp   time.Time   `json:"timestamp"`
+	Correlation string      `json:"correlation_id"`
 }
 
 type ProgressUpdate struct {
-	ID          string            `json:"id"`
-	Agent       string            `json:"agent"`
-	Status      string            `json:"status"`
-	Progress    float64           `json:"progress"`
-	Message     string            `json:"message"`
-	Timestamp   time.Time         `json:"timestamp"`
-	Metadata    map[string]string `json:"metadata"`
+	ID        string            `json:"id"`
+	Agent     string            `json:"agent"`
+	Status    string            `json:"status"`
+	Progress  float64           `json:"progress"`
+	Message   string            `json:"message"`
+	Timestamp time.Time         `json:"timestamp"`
+	Metadata  map[string]string `json:"metadata"`
 }
 
 type AgentStatus string
@@ -97,16 +97,16 @@ const (
 
 const (
 	RequestTypeDataCollection RequestType = "data_collection"
-	RequestTypeExecution     RequestType = "execution"
-	RequestTypeEvaluation    RequestType = "evaluation"
-	RequestTypeStatusQuery   RequestType = "status_query"
+	RequestTypeExecution      RequestType = "execution"
+	RequestTypeEvaluation     RequestType = "evaluation"
+	RequestTypeStatusQuery    RequestType = "status_query"
 )
 
 const (
-	MessageTypeRequest  MessageType = "request"
-	MessageTypeResponse MessageType = "response"
-	MessageTypeProgress MessageType = "progress"
-	MessageTypeError    MessageType = "error"
+	MessageTypeRequest      MessageType = "request"
+	MessageTypeResponse     MessageType = "response"
+	MessageTypeProgress     MessageType = "progress"
+	MessageTypeError        MessageType = "error"
 	MessageTypeNotification MessageType = "notification"
 )
 
@@ -120,13 +120,13 @@ const (
 )
 
 type ExecutionPlan struct {
-	ID              string                 `json:"id"`
-	Tasks           []Task                 `json:"tasks"`
-	Dependencies    []Dependency           `json:"dependencies"`
-	CreatedAt       time.Time              `json:"created_at"`
-	EstimatedDuration time.Duration        `json:"estimated_duration"`
-	ResourceRequirements map[string]int     `json:"resource_requirements"`
-	Status          PlanStatus             `json:"status"`
+	ID                   string         `json:"id"`
+	Tasks                []Task         `json:"tasks"`
+	Dependencies         []Dependency   `json:"dependencies"`
+	CreatedAt            time.Time      `json:"created_at"`
+	EstimatedDuration    time.Duration  `json:"estimated_duration"`
+	ResourceRequirements map[string]int `json:"resource_requirements"`
+	Status               PlanStatus     `json:"status"`
 }
 
 type Task struct {
@@ -135,7 +135,7 @@ type Task struct {
 	DataSource   string                 `json:"data_source"`
 	Parameters   map[string]interface{} `json:"parameters"`
 	Dependencies []string               `json:"dependencies"`
-	Priority     Priority                `json:"priority"`
+	Priority     Priority               `json:"priority"`
 	Status       TaskStatus             `json:"status"`
 	CreatedAt    time.Time              `json:"created_at"`
 	UpdatedAt    time.Time              `json:"updated_at"`
@@ -143,9 +143,9 @@ type Task struct {
 }
 
 type Dependency struct {
-	TaskID     string `json:"task_id"`
-	DependsOn  string `json:"depends_on"`
-	Type       string `json:"type"` // "sequential", "parallel", "conditional"
+	TaskID    string `json:"task_id"`
+	DependsOn string `json:"depends_on"`
+	Type      string `json:"type"` // "sequential", "parallel", "conditional"
 }
 
 type TaskType string
@@ -157,10 +157,10 @@ type PlanStatus string
 type Priority string
 
 const (
-	TaskTypeDataCollection TaskType = "data_collection"
-	TaskTypeDataProcessing TaskType = "data_processing"
+	TaskTypeDataCollection   TaskType = "data_collection"
+	TaskTypeDataProcessing   TaskType = "data_processing"
 	TaskTypeReportGeneration TaskType = "report_generation"
-	TaskTypeValidation     TaskType = "validation"
+	TaskTypeValidation       TaskType = "validation"
 )
 
 const (
@@ -172,11 +172,11 @@ const (
 )
 
 const (
-	PlanStatusCreated    PlanStatus = "created"
-	PlanStatusRunning    PlanStatus = "running"
-	PlanStatusCompleted  PlanStatus = "completed"
-	PlanStatusFailed     PlanStatus = "failed"
-	PlanStatusCancelled  PlanStatus = "cancelled"
+	PlanStatusCreated   PlanStatus = "created"
+	PlanStatusRunning   PlanStatus = "running"
+	PlanStatusCompleted PlanStatus = "completed"
+	PlanStatusFailed    PlanStatus = "failed"
+	PlanStatusCancelled PlanStatus = "cancelled"
 )
 
 const (
@@ -187,21 +187,21 @@ const (
 )
 
 type ToolResult struct {
-	Success   bool                   `json:"success"`
-	Data      interface{}            `json:"data"`
-	Metadata  map[string]string      `json:"metadata"`
-	Error     string                 `json:"error,omitempty"`
-	Timestamp time.Time              `json:"timestamp"`
-	Cached    bool                   `json:"cached,omitempty"`
+	Success   bool              `json:"success"`
+	Data      interface{}       `json:"data"`
+	Metadata  map[string]string `json:"metadata"`
+	Error     string            `json:"error,omitempty"`
+	Timestamp time.Time         `json:"timestamp"`
+	Cached    bool              `json:"cached,omitempty"`
 }
 
 type ToolSchema struct {
-	Name        string              `json:"name"`
-	Version     string              `json:"version"`
-	Description string              `json:"description"`
+	Name        string                `json:"name"`
+	Version     string                `json:"version"`
+	Description string                `json:"description"`
 	Parameters  map[string]*Parameter `json:"parameters"`
-	Required    []string            `json:"required"`
-	Returns     *Parameter          `json:"returns"`
+	Required    []string              `json:"required"`
+	Returns     *Parameter            `json:"returns"`
 }
 
 type Parameter struct {

@@ -15,6 +15,8 @@ type Config struct {
 	Communication CommunicationConfig `mapstructure:"communication"`
 	Tools         ToolsConfig         `mapstructure:"tools"`
 	Database      DatabaseConfig      `mapstructure:"database"`
+	Logging       LoggingConfig       `mapstructure:"logging"`
+	Audit         AuditConfig         `mapstructure:"audit"`
 }
 
 type AppConfig struct {
@@ -113,6 +115,51 @@ type DatabaseConfig struct {
 	MaxOpenConns    int           `mapstructure:"max_open_conns"`
 	MaxIdleConns    int           `mapstructure:"max_idle_conns"`
 	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
+}
+
+type LoggingConfig struct {
+	Level       string           `mapstructure:"level"`
+	Format      string           `mapstructure:"format"`
+	Output      []string         `mapstructure:"output"`
+	File        string           `mapstructure:"file"`
+	Development bool             `mapstructure:"development"`
+	Datadog     DatadogLogConfig `mapstructure:"datadog"`
+}
+
+type DatadogLogConfig struct {
+	Enabled   bool   `mapstructure:"enabled"`
+	InjectAPM bool   `mapstructure:"inject_apm"`
+	Service   string `mapstructure:"service"`
+	Env       string `mapstructure:"env"`
+	Version   string `mapstructure:"version"`
+}
+
+type AuditConfig struct {
+	Enabled         bool            `mapstructure:"enabled"`
+	ExposeEndpoints bool            `mapstructure:"expose_endpoints"`
+	Categories      AuditCategories `mapstructure:"categories"`
+	RetentionDays   int             `mapstructure:"retention_days"`
+	Redact          AuditRedact     `mapstructure:"redact"`
+	FileSink        AuditFileSink   `mapstructure:"file_sink"`
+}
+
+type AuditCategories struct {
+	HTTP     bool `mapstructure:"http"`
+	Agent    bool `mapstructure:"agent"`
+	External bool `mapstructure:"external"`
+}
+
+type AuditRedact struct {
+	DenyKeys []string `mapstructure:"deny_keys"`
+}
+
+type AuditFileSink struct {
+	Enabled    bool   `mapstructure:"enabled"`
+	Path       string `mapstructure:"path"`
+	MaxSizeMB  int    `mapstructure:"max_size_mb"`
+	MaxBackups int    `mapstructure:"max_backups"`
+	MaxAgeDays int    `mapstructure:"max_age_days"`
+	Compress   bool   `mapstructure:"compress"`
 }
 
 func Load(configPath string) (*Config, error) {

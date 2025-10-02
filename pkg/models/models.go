@@ -24,13 +24,13 @@ type AgentStatus struct {
 
 // SystemMetrics represents system performance metrics
 type SystemMetrics struct {
-	Uptime          int64   `json:"uptime"`
-	MemoryUsage     int64   `json:"memory_usage"`
-	CPUUsage        float64 `json:"cpu_usage"`
-	RequestsTotal   int64   `json:"requests_total"`
-	ActiveAgents    int     `json:"active_agents"`
-	DatabaseStatus  string  `json:"database_status"`
-	RedisStatus     string  `json:"redis_status"`
+	Uptime         int64   `json:"uptime"`
+	MemoryUsage    int64   `json:"memory_usage"`
+	CPUUsage       float64 `json:"cpu_usage"`
+	RequestsTotal  int64   `json:"requests_total"`
+	ActiveAgents   int     `json:"active_agents"`
+	DatabaseStatus string  `json:"database_status"`
+	RedisStatus    string  `json:"redis_status"`
 }
 
 // HealthCheck represents health check response
