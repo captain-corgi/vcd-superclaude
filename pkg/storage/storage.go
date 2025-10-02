@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/captain-corgi/multi-agent-system/pkg/audit"
+	"github.com/captain-corgi/multi-agent-system/pkg/models"
 )
 
 type Storage struct {
@@ -313,6 +314,25 @@ func (s *Storage) InitializeSchema() error {
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS users (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		google_sub VARCHAR(255) UNIQUE NOT NULL,
+		email VARCHAR(320) UNIQUE NOT NULL,
+		name VARCHAR(255),
+		picture_url TEXT,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		last_login_at TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS user_sessions (
+		session_id VARCHAR(255) PRIMARY KEY,
+		user_id UUID NOT NULL,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		expires_at TIMESTAMP NOT NULL,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 	CREATE INDEX IF NOT EXISTS idx_responses_timestamp ON responses(timestamp);
@@ -323,6 +343,9 @@ func (s *Storage) InitializeSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_audit_events_category ON audit_events(category);
 	CREATE INDEX IF NOT EXISTS idx_audit_events_actor_id ON audit_events(actor_id);
 	CREATE INDEX IF NOT EXISTS idx_audit_events_request_id ON audit_events(request_id);
+	CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+	CREATE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub);
+	CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at);
 `
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -536,6 +559,161 @@ func (s *Storage) CleanupAuditEvents(ctx context.Context, retentionDays int) (in
 	result, err := s.db.ExecContext(ctx, fmt.Sprintf(query, retentionDays))
 	if err != nil {
 		return 0, fmt.Errorf("failed to cleanup audit events: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	return rowsAffected, nil
+}
+
+// User-related database operations
+
+// CreateOrUpdateUser creates a new user or updates an existing one
+func (s *Storage) CreateOrUpdateUser(ctx context.Context, user *models.User) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		INSERT INTO users (google_sub, email, name, picture_url, last_login_at, updated_at)
+		VALUES ($1, $2, $3, $4, NOW(), NOW())
+		ON CONFLICT (google_sub)
+		DO UPDATE SET
+			email = EXCLUDED.email,
+			name = EXCLUDED.name,
+			picture_url = EXCLUDED.picture_url,
+			last_login_at = NOW(),
+			updated_at = NOW()
+		RETURNING id, created_at, updated_at
+	`
+
+	err := s.db.QueryRowContext(ctx, query,
+		user.GoogleSub, user.Email, user.Name, user.PictureURL).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
+
+	if err != nil {
+		return fmt.Errorf("failed to create or update user: %w", err)
+	}
+
+	return nil
+}
+
+// GetUserByGoogleSub retrieves a user by their Google subject ID
+func (s *Storage) GetUserByGoogleSub(ctx context.Context, googleSub string) (*models.User, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT id, google_sub, email, name, picture_url, created_at, updated_at, last_login_at
+		FROM users WHERE google_sub = $1
+	`
+
+	user := &models.User{}
+	err := s.db.QueryRowContext(ctx, query, googleSub).Scan(
+		&user.ID, &user.GoogleSub, &user.Email, &user.Name, &user.PictureURL,
+		&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user by google_sub: %w", err)
+	}
+
+	return user, nil
+}
+
+// GetUserByID retrieves a user by their ID
+func (s *Storage) GetUserByID(ctx context.Context, userID string) (*models.User, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT id, google_sub, email, name, picture_url, created_at, updated_at, last_login_at
+		FROM users WHERE id = $1
+	`
+
+	user := &models.User{}
+	err := s.db.QueryRowContext(ctx, query, userID).Scan(
+		&user.ID, &user.GoogleSub, &user.Email, &user.Name, &user.PictureURL,
+		&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user by id: %w", err)
+	}
+
+	return user, nil
+}
+
+// CreateUserSession creates a new user session
+func (s *Storage) CreateUserSession(ctx context.Context, session *models.UserSession) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		INSERT INTO user_sessions (session_id, user_id, expires_at)
+		VALUES ($1, $2, $3)
+	`
+
+	_, err := s.db.ExecContext(ctx, query, session.SessionID, session.UserID, session.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("failed to create user session: %w", err)
+	}
+
+	return nil
+}
+
+// GetUserSession retrieves a user session by session ID
+func (s *Storage) GetUserSession(ctx context.Context, sessionID string) (*models.UserSession, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	query := `
+		SELECT session_id, user_id, created_at, expires_at
+		FROM user_sessions WHERE session_id = $1 AND expires_at > NOW()
+	`
+
+	session := &models.UserSession{}
+	err := s.db.QueryRowContext(ctx, query, sessionID).Scan(
+		&session.SessionID, &session.UserID, &session.CreatedAt, &session.ExpiresAt)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user session: %w", err)
+	}
+
+	return session, nil
+}
+
+// DeleteUserSession deletes a user session
+func (s *Storage) DeleteUserSession(ctx context.Context, sessionID string) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `DELETE FROM user_sessions WHERE session_id = $1`
+
+	_, err := s.db.ExecContext(ctx, query, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete user session: %w", err)
+	}
+
+	return nil
+}
+
+// CleanupExpiredSessions removes expired user sessions
+func (s *Storage) CleanupExpiredSessions(ctx context.Context) (int64, error) {
+	if s.db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	query := `DELETE FROM user_sessions WHERE expires_at < NOW()`
+
+	result, err := s.db.ExecContext(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup expired sessions: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()

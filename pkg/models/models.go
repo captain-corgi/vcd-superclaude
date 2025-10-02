@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 // APIRequest represents the external API request structure
 type APIRequest struct {
 	Type     string                 `json:"type" validate:"required,oneof=create,read,update,delete"`
@@ -39,4 +41,24 @@ type HealthCheck struct {
 	Timestamp string                 `json:"timestamp"`
 	Version   string                 `json:"version"`
 	Metrics   map[string]interface{} `json:"metrics,omitempty"`
+}
+
+// User represents a user in the system
+type User struct {
+	ID          string `json:"id" db:"id"`
+	GoogleSub   string `json:"google_sub" db:"google_sub"`
+	Email       string `json:"email" db:"email"`
+	Name        string `json:"name" db:"name"`
+	PictureURL  string `json:"picture_url" db:"picture_url"`
+	CreatedAt   string `json:"created_at" db:"created_at"`
+	UpdatedAt   string `json:"updated_at" db:"updated_at"`
+	LastLoginAt string `json:"last_login_at" db:"last_login_at"`
+}
+
+// UserSession represents a user session for authentication
+type UserSession struct {
+	SessionID string    `json:"session_id" db:"session_id"`
+	UserID    string    `json:"user_id" db:"user_id"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	ExpiresAt time.Time `json:"expires_at" db:"expires_at"`
 }

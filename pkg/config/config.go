@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -17,6 +18,7 @@ type Config struct {
 	Database      DatabaseConfig      `mapstructure:"database"`
 	Logging       LoggingConfig       `mapstructure:"logging"`
 	Audit         AuditConfig         `mapstructure:"audit"`
+	Auth          AuthConfig          `mapstructure:"auth"`
 }
 
 type AppConfig struct {
@@ -162,6 +164,30 @@ type AuditFileSink struct {
 	Compress   bool   `mapstructure:"compress"`
 }
 
+type AuthConfig struct {
+	Providers ProvidersConfig `mapstructure:"providers"`
+	Session   SessionConfig   `mapstructure:"session"`
+}
+
+type ProvidersConfig struct {
+	Google GoogleConfig `mapstructure:"google"`
+}
+
+type GoogleConfig struct {
+	ClientID        string   `mapstructure:"client_id"`
+	ClientSecret    string   `mapstructure:"client_secret"`
+	RedirectBaseURL string   `mapstructure:"redirect_base_url"`
+	AllowedDomains  []string `mapstructure:"allowed_domains"`
+}
+
+type SessionConfig struct {
+	CookieName string        `mapstructure:"cookie_name"`
+	Domain     string        `mapstructure:"domain"`
+	Secure     bool          `mapstructure:"secure"`
+	TTL        time.Duration `mapstructure:"ttl"`
+	SameSite   string        `mapstructure:"samesite"` // lax/strict/none
+}
+
 func Load(configPath string) (*Config, error) {
 	viper.SetConfigFile(configPath)
 	viper.AutomaticEnv()
@@ -171,6 +197,11 @@ func Load(configPath string) (*Config, error) {
 	viper.SetDefault("database.max_open_conns", 25)
 	viper.SetDefault("database.max_idle_conns", 5)
 	viper.SetDefault("database.conn_max_lifetime", "5m")
+	viper.SetDefault("auth.providers.google.redirect_base_url", "http://localhost:8080")
+	viper.SetDefault("auth.session.cookie_name", "mas_session")
+	viper.SetDefault("auth.session.secure", false)
+	viper.SetDefault("auth.session.ttl", "24h")
+	viper.SetDefault("auth.session.samesite", "lax")
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("failed to read config: %w", err)
@@ -215,6 +246,23 @@ func LoadFromEnv() (*Config, error) {
 				MaxReportSize: getEnvInt64("EVALUATOR_MAX_REPORT_SIZE", 10*1024*1024),
 			},
 		},
+		Auth: AuthConfig{
+			Providers: ProvidersConfig{
+				Google: GoogleConfig{
+					ClientID:        os.Getenv("GOOGLE_CLIENT_ID"),
+					ClientSecret:    os.Getenv("GOOGLE_CLIENT_SECRET"),
+					RedirectBaseURL: getEnvString("AUTH_REDIRECT_BASE_URL", "http://localhost:8080"),
+					AllowedDomains:  getEnvStringSlice("AUTH_ALLOWED_DOMAINS", []string{}),
+				},
+			},
+			Session: SessionConfig{
+				CookieName: getEnvString("AUTH_COOKIE_NAME", "mas_session"),
+				Domain:     getEnvString("AUTH_COOKIE_DOMAIN", ""),
+				Secure:     getEnvBool("AUTH_COOKIE_SECURE", false),
+				TTL:        getEnvDuration("AUTH_SESSION_TTL", 24*time.Hour),
+				SameSite:   getEnvString("AUTH_COOKIE_SAMESITE", "lax"),
+			},
+		},
 	}
 
 	return config, nil
@@ -254,6 +302,31 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 			return defaultValue
 		}
 		return duration
+	}
+	return defaultValue
+}
+
+func getEnvString(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		return value == "true"
+	}
+	return defaultValue
+}
+
+func getEnvStringSlice(key string, defaultValue []string) []string {
+	if value := os.Getenv(key); value != "" {
+		// Simple comma-separated parsing
+		if value == "" {
+			return defaultValue
+		}
+		return strings.Split(value, ",")
 	}
 	return defaultValue
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/captain-corgi/multi-agent-system/internal/agents"
 	"github.com/captain-corgi/multi-agent-system/internal/communication/streaming"
+	"github.com/captain-corgi/multi-agent-system/internal/web/oidc"
 	"github.com/captain-corgi/multi-agent-system/pkg/audit"
 	"github.com/captain-corgi/multi-agent-system/pkg/config"
 	"github.com/captain-corgi/multi-agent-system/pkg/metrics"
@@ -32,6 +33,9 @@ type Server struct {
 	agents        map[string]agents.Agent
 	auditRecorder audit.AuditRecorder
 	retentionJob  *RetentionJob
+	sessionMgr    *SessionManager
+	oidcProvider  oidc.OIDCProvider
+	authHandlers  *AuthHandlers
 }
 
 type ServerStats struct {
@@ -76,6 +80,28 @@ func NewServer(cfg *config.Config, storage *storage.Storage, logger *zap.Logger)
 		agents:    make(map[string]agents.Agent),
 	}
 
+	// Initialize OIDC provider
+	if cfg.Auth.Providers.Google.ClientID != "" && cfg.Auth.Providers.Google.ClientSecret != "" {
+		oidcProvider, err := oidc.NewGoogleOIDCProvider(&cfg.Auth.Providers.Google, logger)
+		if err != nil {
+			logger.Error("Failed to initialize OIDC provider", zap.Error(err))
+			// Continue without auth for development
+		} else {
+			server.oidcProvider = oidcProvider
+
+			// Initialize session manager
+			server.sessionMgr = NewSessionManager(storage, &cfg.Auth, logger)
+
+			// Initialize audit helper
+			auditHelper := NewAuditHelper(server.auditRecorder, &cfg.Audit, logger)
+
+			// Initialize auth handlers
+			server.authHandlers = NewAuthHandlers(oidcProvider, server.sessionMgr, storage, logger, auditHelper)
+		}
+	} else {
+		logger.Info("OIDC provider not configured - authentication disabled")
+	}
+
 	// Setup audit middleware if enabled
 	if cfg.Audit.Enabled {
 		// Create audit recorder
@@ -113,14 +139,24 @@ func (s *Server) Echo() *echo.Echo {
 }
 
 func (s *Server) setupRoutes() {
-	// Health checks
+	// Health checks (public)
 	s.echo.GET("/health", s.healthCheck)
 	s.echo.GET("/health/detailed", s.detailedHealthCheck)
 	s.echo.GET("/ready", s.readinessCheck)
 	s.echo.GET("/live", s.livenessCheck)
 
-	// API routes
+	// Authentication routes
+	if s.authHandlers != nil {
+		s.echo.GET("/auth/google/login", s.authHandlers.GoogleLoginHandler)
+		s.echo.GET("/auth/google/callback", s.authHandlers.GoogleCallbackHandler)
+		s.echo.POST("/auth/logout", s.authHandlers.LogoutHandler)
+	}
+
+	// API routes (protected)
 	api := s.echo.Group("/api")
+	if s.sessionMgr != nil {
+		api.Use(AuthRequiredMiddleware(s.sessionMgr, s.logger))
+	}
 	api.POST("/requests", s.createRequest)
 	api.GET("/requests/:id", s.getRequest)
 	api.GET("/requests", s.listRequests)
@@ -129,16 +165,25 @@ func (s *Server) setupRoutes() {
 	api.GET("/metrics", s.getMetrics)
 	api.GET("/config", s.getConfig)
 
-	// Audit routes (if enabled)
-	if s.config.Audit.Enabled && s.config.Audit.ExposeEndpoints {
+	// User profile route (protected)
+	if s.authHandlers != nil {
+		api.GET("/me", s.authHandlers.MeHandler)
+	}
+
+	// Audit routes (if enabled and authenticated)
+	if s.config.Audit.Enabled && s.config.Audit.ExposeEndpoints && s.sessionMgr != nil {
 		api.GET("/audit/events", s.listAuditEvents)
 		api.GET("/audit/events/:id", s.getAuditEvent)
 	}
 
-	// WebSocket route
-	s.echo.GET("/ws", s.websocketHandler)
+	// WebSocket route (protected)
+	if s.sessionMgr != nil {
+		s.echo.GET("/ws", s.websocketHandler, AuthRequiredMiddleware(s.sessionMgr, s.logger))
+	} else {
+		s.echo.GET("/ws", s.websocketHandler)
+	}
 
-	// Static files
+	// Static files (public)
 	s.echo.Static("/static", "web/static")
 	s.echo.File("/", "web/static/index.html")
 }
