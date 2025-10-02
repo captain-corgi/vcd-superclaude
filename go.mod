@@ -11,6 +11,7 @@ require (
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/zap v1.27.0
+	golang.org/x/crypto v0.39.0
 	golang.org/x/oauth2 v0.28.0
 	gopkg.in/DataDog/dd-trace-go.v1 v1.74.6
 )
@@ -99,7 +100,6 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.39.0 // indirect
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/mod v0.26.0 // indirect
 	golang.org/x/net v0.40.0 // indirect

@@ -19,21 +19,23 @@ import (
 
 // AuthHandlers handles authentication routes
 type AuthHandlers struct {
-	oidcProvider oidc.OIDCProvider
-	sessionMgr   *SessionManager
-	storage      interface{} // For future use if needed
-	logger       *zap.Logger
-	auditHelper  *AuditHelper
+	oidcProvider         oidc.OIDCProvider
+	sessionMgr           *SessionManager
+	storage              interface{} // For future use if needed
+	logger               *zap.Logger
+	auditHelper          *AuditHelper
+	bootstrapAdminEmails []string
 }
 
 // NewAuthHandlers creates new auth handlers
-func NewAuthHandlers(oidcProvider oidc.OIDCProvider, sessionMgr *SessionManager, storage interface{}, logger *zap.Logger, auditHelper *AuditHelper) *AuthHandlers {
+func NewAuthHandlers(oidcProvider oidc.OIDCProvider, sessionMgr *SessionManager, storage interface{}, logger *zap.Logger, auditHelper *AuditHelper, bootstrapAdminEmails []string) *AuthHandlers {
 	return &AuthHandlers{
-		oidcProvider: oidcProvider,
-		sessionMgr:   sessionMgr,
-		storage:      storage,
-		logger:       logger,
-		auditHelper:  auditHelper,
+		oidcProvider:         oidcProvider,
+		sessionMgr:           sessionMgr,
+		storage:              storage,
+		logger:               logger,
+		auditHelper:          auditHelper,
+		bootstrapAdminEmails: bootstrapAdminEmails,
 	}
 }
 
@@ -141,6 +143,16 @@ func (h *AuthHandlers) GoogleCallbackHandler(c echo.Context) error {
 		})
 	}
 
+	// Enforce allowed domains
+	if err := h.oidcProvider.ValidateDomain(userInfo.Email); err != nil {
+		h.logger.Warn("Domain validation failed",
+			zap.String("email", userInfo.Email),
+			zap.Error(err))
+		return c.JSON(http.StatusForbidden, map[string]string{
+			"error": "Domain not allowed",
+		})
+	}
+
 	// Create or update user in database
 	user := &models.User{
 		GoogleSub:  userInfo.Subject,
@@ -157,6 +169,28 @@ func (h *AuthHandlers) GoogleCallbackHandler(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to process user",
 		})
+	}
+
+	// Check if user should be auto-assigned admin role (bootstrap)
+	if h.shouldBootstrapAdmin(user.Email) {
+		adminRole, err := storage.GetRoleByName(ctx, "admin")
+		if err != nil {
+			h.logger.Error("Failed to get admin role for bootstrap",
+				zap.String("email", user.Email),
+				zap.Error(err))
+		} else {
+			err = storage.AssignRoleToUser(ctx, user.ID, adminRole.ID)
+			if err != nil {
+				h.logger.Error("Failed to assign admin role during bootstrap",
+					zap.String("user_id", user.ID),
+					zap.String("email", user.Email),
+					zap.Error(err))
+			} else {
+				h.logger.Info("Admin role assigned during bootstrap",
+					zap.String("user_id", user.ID),
+					zap.String("email", user.Email))
+			}
+		}
 	}
 
 	// Create session
@@ -310,6 +344,22 @@ func (h *AuthHandlers) generateState() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+func (h *AuthHandlers) shouldBootstrapAdmin(email string) bool {
+	// Check if bootstrap admin emails are configured
+	if len(h.bootstrapAdminEmails) == 0 {
+		return false
+	}
+
+	// Check if the user's email is in the bootstrap list
+	for _, bootstrapEmail := range h.bootstrapAdminEmails {
+		if email == bootstrapEmail {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (h *AuthHandlers) isValidRedirectURL(redirectURL string) bool {

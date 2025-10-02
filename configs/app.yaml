@@ -36,6 +36,7 @@ communication:
     protocol: "trpc"
     timeout: 10s
     retries: 3
+    service_token: "${COMMUNICATION_A2A_SERVICE_TOKEN}"
 
   streaming:
     enabled: true
@@ -113,3 +114,10 @@ auth:
     secure: false
     ttl: 24h
     samesite: "lax"
+  csrf:
+    secret: "${AUTH_CSRF_SECRET:-your-csrf-secret-key}"
+    cookie_name: "csrf_token"
+    cookie_samesite: "lax"
+    token_length: 32
+    token_ttl: 1h
+  bootstrap_admin_emails: [] # e.g., ["admin@yourcompany.com"]

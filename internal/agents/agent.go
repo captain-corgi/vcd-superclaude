@@ -51,13 +51,14 @@ type Response struct {
 }
 
 type Message struct {
-	ID          string      `json:"id"`
-	Type        MessageType `json:"type"`
-	Content     interface{} `json:"content"`
-	FromAgent   string      `json:"from_agent"`
-	ToAgent     string      `json:"to_agent"`
-	Timestamp   time.Time   `json:"timestamp"`
-	Correlation string      `json:"correlation_id"`
+	ID          string            `json:"id"`
+	Type        MessageType       `json:"type"`
+	Content     interface{}       `json:"content"`
+	FromAgent   string            `json:"from_agent"`
+	ToAgent     string            `json:"to_agent"`
+	Timestamp   time.Time         `json:"timestamp"`
+	Correlation string            `json:"correlation_id"`
+	Metadata    map[string]string `json:"metadata"`
 }
 
 type ProgressUpdate struct {

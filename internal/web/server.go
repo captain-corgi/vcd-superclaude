@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"go.uber.org/zap"
 
 	"github.com/captain-corgi/multi-agent-system/internal/agents"
@@ -36,6 +38,7 @@ type Server struct {
 	sessionMgr    *SessionManager
 	oidcProvider  oidc.OIDCProvider
 	authHandlers  *AuthHandlers
+	patHandlers   *PATHandlers
 }
 
 type ServerStats struct {
@@ -96,7 +99,10 @@ func NewServer(cfg *config.Config, storage *storage.Storage, logger *zap.Logger)
 			auditHelper := NewAuditHelper(server.auditRecorder, &cfg.Audit, logger)
 
 			// Initialize auth handlers
-			server.authHandlers = NewAuthHandlers(oidcProvider, server.sessionMgr, storage, logger, auditHelper)
+			server.authHandlers = NewAuthHandlers(oidcProvider, server.sessionMgr, storage, logger, auditHelper, cfg.Auth.BootstrapAdminEmails)
+
+			// Initialize PAT handlers
+			server.patHandlers = NewPATHandlers(server.sessionMgr, storage, logger, auditHelper)
 		}
 	} else {
 		logger.Info("OIDC provider not configured - authentication disabled")
@@ -138,12 +144,42 @@ func (s *Server) Echo() *echo.Echo {
 	return s.echo
 }
 
+// Helper function to parse SameSite attribute for CSRF cookies
+func parseSameSite(sameSite string) http.SameSite {
+	switch strings.ToLower(sameSite) {
+	case "strict":
+		return http.SameSiteStrictMode
+	case "lax":
+		return http.SameSiteLaxMode
+	case "none":
+		return http.SameSiteNoneMode
+	default:
+		return http.SameSiteLaxMode
+	}
+}
+
 func (s *Server) setupRoutes() {
 	// Health checks (public)
 	s.echo.GET("/health", s.healthCheck)
 	s.echo.GET("/health/detailed", s.detailedHealthCheck)
 	s.echo.GET("/ready", s.readinessCheck)
 	s.echo.GET("/live", s.livenessCheck)
+
+	// Setup CSRF middleware for cookie-authenticated routes (skip for Bearer tokens)
+	if s.sessionMgr != nil && s.config.Auth.CSRF.Secret != "" {
+		csrfConfig := middleware.CSRFConfig{
+			Skipper: func(c echo.Context) bool {
+				// Skip CSRF for Bearer token requests
+				authHeader := c.Request().Header.Get("Authorization")
+				return strings.HasPrefix(authHeader, "Bearer ")
+			},
+			TokenLookup:    "header:X-CSRF-Token",
+			CookieName:     s.config.Auth.CSRF.CookieName,
+			CookieSameSite: parseSameSite(s.config.Auth.CSRF.CookieSameSite),
+			ContextKey:     "csrf",
+		}
+		s.echo.Use(middleware.CSRFWithConfig(csrfConfig))
+	}
 
 	// Authentication routes
 	if s.authHandlers != nil {
@@ -170,10 +206,19 @@ func (s *Server) setupRoutes() {
 		api.GET("/me", s.authHandlers.MeHandler)
 	}
 
-	// Audit routes (if enabled and authenticated)
+	// Audit routes (if enabled and authenticated with proper roles)
 	if s.config.Audit.Enabled && s.config.Audit.ExposeEndpoints && s.sessionMgr != nil {
-		api.GET("/audit/events", s.listAuditEvents)
-		api.GET("/audit/events/:id", s.getAuditEvent)
+		auditGroup := api.Group("/audit", RequireRolesMiddleware(s.sessionMgr, s.logger, "admin", "audit_reader"))
+		auditGroup.GET("/events", s.listAuditEvents)
+		auditGroup.GET("/events/:id", s.getAuditEvent)
+	}
+
+	// Admin routes (admin role required)
+	if s.sessionMgr != nil && s.patHandlers != nil {
+		adminGroup := api.Group("/admin", RequireRolesMiddleware(s.sessionMgr, s.logger, "admin"))
+		adminGroup.POST("/tokens", s.patHandlers.CreatePATHandler)
+		adminGroup.GET("/tokens", s.patHandlers.ListPATHandler)
+		adminGroup.DELETE("/tokens/:id", s.patHandlers.DeletePATHandler)
 	}
 
 	// WebSocket route (protected)

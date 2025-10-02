@@ -11,11 +11,12 @@ import (
 )
 
 type Client struct {
-	agents  map[string]string
-	mu      sync.RWMutex
-	logger  *zap.Logger
-	timeout time.Duration
-	retries int
+	agents       map[string]string
+	mu           sync.RWMutex
+	logger       *zap.Logger
+	timeout      time.Duration
+	retries      int
+	serviceToken string
 }
 
 type Message struct {
@@ -38,12 +39,13 @@ type Response struct {
 	Timestamp time.Time   `json:"timestamp"`
 }
 
-func NewClient(logger *zap.Logger, timeout time.Duration, retries int) *Client {
+func NewClient(logger *zap.Logger, timeout time.Duration, retries int, serviceToken string) *Client {
 	return &Client{
-		agents:  make(map[string]string),
-		logger:  logger,
-		timeout: timeout,
-		retries: retries,
+		agents:       make(map[string]string),
+		logger:       logger,
+		timeout:      timeout,
+		retries:      retries,
+		serviceToken: serviceToken,
 	}
 }
 
@@ -65,6 +67,12 @@ func (c *Client) SendMessage(ctx context.Context, message *agents.Message) (*age
 	if !exists {
 		return nil, fmt.Errorf("agent %s not found", message.ToAgent)
 	}
+
+	// Attach service token to message metadata
+	if message.Metadata == nil {
+		message.Metadata = make(map[string]string)
+	}
+	message.Metadata["X-Service-Token"] = c.serviceToken
 
 	var lastErr error
 
@@ -196,7 +204,10 @@ func (c *Client) BroadcastMessage(ctx context.Context, message *agents.Message) 
 				ToAgent:     targetAgent,
 				Timestamp:   time.Now(),
 				Correlation: message.Correlation,
+				Metadata:    make(map[string]string),
 			}
+			// Attach service token
+			agentMessage.Metadata["X-Service-Token"] = c.serviceToken
 
 			// Send message to this agent
 			resp, err := c.SendMessage(ctx, agentMessage)
